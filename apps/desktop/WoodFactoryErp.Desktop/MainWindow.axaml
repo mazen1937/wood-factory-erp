@@ -1,0 +1,12 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="WoodFactoryErp.Desktop.MainWindow"
+        Title="نظام إدارة مصنع الأخشاب" Width="900" Height="520">
+  <Grid Margin="32" RowDefinitions="Auto,Auto,*">
+    <TextBlock Text="نظام إدارة مصنع الأخشاب" FontSize="28" FontWeight="SemiBold" HorizontalAlignment="Right" />
+    <TextBlock Grid.Row="1" Margin="0,12,0,0" Text="Foundation scaffold · Arabic-first · Offline-ready" HorizontalAlignment="Right" />
+    <Border Grid.Row="2" Margin="0,28,0,0" Padding="20" CornerRadius="8" Background="{DynamicResource SystemControlBackgroundAltHighBrush}">
+      <TextBlock TextWrapping="Wrap" Text="The desktop shell is running. Next: authentication, local SQLite repository, and synchronized master-data modules." />
+    </Border>
+  </Grid>
+</Window>
