@@ -1,12 +1,33 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         x:Class="WoodFactoryErp.Desktop.MainWindow"
-        Title="نظام إدارة مصنع الأخشاب" Width="900" Height="520">
-  <Grid Margin="32" RowDefinitions="Auto,Auto,*">
-    <TextBlock Text="نظام إدارة مصنع الأخشاب" FontSize="28" FontWeight="SemiBold" HorizontalAlignment="Right" />
-    <TextBlock Grid.Row="1" Margin="0,12,0,0" Text="Foundation scaffold · Arabic-first · Offline-ready" HorizontalAlignment="Right" />
-    <Border Grid.Row="2" Margin="0,28,0,0" Padding="20" CornerRadius="8" Background="{DynamicResource SystemControlBackgroundAltHighBrush}">
-      <TextBlock TextWrapping="Wrap" Text="The desktop shell is running. Next: authentication, local SQLite repository, and synchronized master-data modules." />
-    </Border>
+        Title="نظام إدارة مصنع الأخشاب" Width="900" Height="580"
+        WindowStartupLocation="CenterScreen">
+  <Grid Margin="48" RowDefinitions="Auto,*">
+    <TextBlock Text="نظام إدارة مصنع الأخشاب" FontSize="30" FontWeight="SemiBold" HorizontalAlignment="Right" />
+    <Grid Grid.Row="1" Margin="0,32,0,0">
+      <Border x:Name="LoginPanel" Width="420" HorizontalAlignment="Center" VerticalAlignment="Center" Padding="30" CornerRadius="12" Background="{DynamicResource SystemControlBackgroundAltHighBrush}">
+        <StackPanel Spacing="14">
+          <TextBlock Text="تسجيل الدخول" FontSize="24" FontWeight="SemiBold" HorizontalAlignment="Right" />
+          <TextBlock Text="استخدم حسابك للوصول إلى نظام المصنع" HorizontalAlignment="Right" Opacity="0.75" />
+          <TextBlock Text="اسم المستخدم" HorizontalAlignment="Right" />
+          <TextBox x:Name="UsernameTextBox" Text="admin" HorizontalContentAlignment="Right" />
+          <TextBlock Text="كلمة المرور" HorizontalAlignment="Right" />
+          <TextBox x:Name="PasswordTextBox" PasswordChar="●" HorizontalContentAlignment="Right" />
+          <TextBlock x:Name="LoginMessageTextBlock" TextWrapping="Wrap" HorizontalAlignment="Right" />
+          <Button x:Name="SignInButton" Click="SignInAsync" HorizontalAlignment="Stretch" Content="تسجيل الدخول" />
+          <TextBlock Text="الخادم المحلي: http://localhost:3000" HorizontalAlignment="Center" Opacity="0.55" FontSize="12" />
+        </StackPanel>
+      </Border>
+      <Border x:Name="WelcomePanel" IsVisible="False" Width="560" HorizontalAlignment="Center" VerticalAlignment="Center" Padding="32" CornerRadius="12" Background="{DynamicResource SystemControlBackgroundAltHighBrush}">
+        <StackPanel Spacing="16">
+          <TextBlock Text="تم تسجيل الدخول بنجاح" FontSize="26" FontWeight="SemiBold" HorizontalAlignment="Right" />
+          <TextBlock x:Name="WelcomeTextBlock" FontSize="18" HorizontalAlignment="Right" />
+          <TextBlock x:Name="RolesTextBlock" HorizontalAlignment="Right" />
+          <TextBlock Text="جلسة التطوير هذه محفوظة في الذاكرة فقط. ستكون الخطوة التالية إضافة تخزين آمن للجلسة وشاشات محمية." TextWrapping="Wrap" HorizontalAlignment="Right" Opacity="0.75" />
+          <Button Click="SignOut" HorizontalAlignment="Stretch" Content="تسجيل الخروج" />
+        </StackPanel>
+      </Border>
+    </Grid>
   </Grid>
 </Window>
