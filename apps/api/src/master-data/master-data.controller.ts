@@ -1,8 +1,88 @@
-import { Body, Controller, Get, Headers, Post, UnauthorizedException } from '@nestjs/common';
-import { IsBoolean, IsIn, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
-import { AuthService } from '../auth/auth.service'; import { MasterDataService } from './master-data.service';
-class UnitDto { @IsString() code!:string; @IsString() nameAr!:string; @IsString() nameEn!:string; @IsInt() @Min(0) @Max(6) precisionDigits!:number; }
-class WarehouseDto { @IsString() code!:string; @IsString() nameAr!:string; @IsString() nameEn!:string; @IsIn(['raw_material','finished_goods']) warehouseType!:string; }
-class PartyDto { @IsString() code!:string; @IsIn(['customer','supplier','both']) partyType!:string; @IsString() nameAr!:string; @IsOptional() @IsString() nameEn?:string; @IsOptional() @IsString() phone?:string; }
-class ItemDto { @IsString() code!:string; @IsString() nameAr!:string; @IsOptional() @IsString() nameEn?:string; @IsIn(['raw_material','accessory','consumable','finished_good']) itemType!:string; @IsString() baseUnitId!:string; @IsBoolean() stockTracked!:boolean; @IsIn(['materials','industrial_expense']) classification!:string; }
-@Controller('master-data') export class MasterDataController { constructor(private auth:AuthService,private service:MasterDataService){} private guard(h?:string){const t=h?.replace(/^Bearer\s+/i,''); if(!t) throw new UnauthorizedException(); return this.auth.me(t); } @Get() async all(@Headers('authorization') h?:string){await this.guard(h); return this.service.all();} @Post('units') async unit(@Headers('authorization') h:string,@Body() b:UnitDto){await this.guard(h);return this.service.unit(b)} @Post('warehouses') async warehouse(@Headers('authorization') h:string,@Body() b:WarehouseDto){await this.guard(h);return this.service.warehouse(b)} @Post('parties') async party(@Headers('authorization') h:string,@Body() b:PartyDto){await this.guard(h);return this.service.party(b)} @Post('items') async item(@Headers('authorization') h:string,@Body() b:ItemDto){await this.guard(h);return this.service.item(b)} }
+import {
+  Body,
+  Controller,
+  Get,
+  Headers,
+  Post,
+  ForbiddenException,
+  UnauthorizedException,
+} from '@nestjs/common';
+import { IsBoolean, IsIn, IsInt, IsNotEmpty, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
+import { AuthService } from '../auth/auth.service';
+import { MasterDataService } from './master-data.service';
+
+class UnitDto {
+  @IsString() @IsNotEmpty() @MaxLength(40) code!: string;
+  @IsString() @IsNotEmpty() @MaxLength(160) nameAr!: string;
+  @IsString() @IsNotEmpty() @MaxLength(160) nameEn!: string;
+  @IsInt() @Min(0) @Max(6) precisionDigits!: number;
+}
+
+class WarehouseDto {
+  @IsString() @IsNotEmpty() @MaxLength(40) code!: string;
+  @IsString() @IsNotEmpty() @MaxLength(160) nameAr!: string;
+  @IsString() @IsNotEmpty() @MaxLength(160) nameEn!: string;
+  @IsIn(['raw_material', 'finished_goods']) warehouseType!: string;
+}
+
+class PartyDto {
+  @IsString() @IsNotEmpty() @MaxLength(40) code!: string;
+  @IsIn(['customer', 'supplier', 'both']) partyType!: string;
+  @IsString() @IsNotEmpty() @MaxLength(160) nameAr!: string;
+  @IsOptional() @IsString() @MaxLength(160) nameEn?: string;
+  @IsOptional() @IsString() @MaxLength(60) phone?: string;
+}
+
+class ItemDto {
+  @IsString() @IsNotEmpty() @MaxLength(40) code!: string;
+  @IsString() @IsNotEmpty() @MaxLength(160) nameAr!: string;
+  @IsOptional() @IsString() @MaxLength(160) nameEn?: string;
+  @IsIn(['raw_material', 'accessory', 'consumable', 'finished_good']) itemType!: string;
+  @IsString() @IsNotEmpty() baseUnitId!: string;
+  @IsBoolean() stockTracked!: boolean;
+  @IsIn(['materials', 'industrial_expense']) classification!: string;
+}
+
+@Controller('master-data')
+export class MasterDataController {
+  constructor(private readonly auth: AuthService, private readonly service: MasterDataService) {}
+
+  private async guard(authorization?: string, requireAdmin = false): Promise<void> {
+    const token = authorization?.replace(/^Bearer\s+/i, '');
+    if (!token) throw new UnauthorizedException();
+    const session = await this.auth.me(token) as { roles?: string[] };
+    if (requireAdmin && !session.roles?.includes('system_admin')) {
+      throw new ForbiddenException('لا تملك صلاحية تعديل البيانات الأساسية.');
+    }
+  }
+
+  @Get()
+  async all(@Headers('authorization') authorization?: string) {
+    await this.guard(authorization);
+    return this.service.all();
+  }
+
+  @Post('units')
+  async unit(@Headers('authorization') authorization: string, @Body() body: UnitDto) {
+    await this.guard(authorization, true);
+    return this.service.unit(body);
+  }
+
+  @Post('warehouses')
+  async warehouse(@Headers('authorization') authorization: string, @Body() body: WarehouseDto) {
+    await this.guard(authorization, true);
+    return this.service.warehouse(body);
+  }
+
+  @Post('parties')
+  async party(@Headers('authorization') authorization: string, @Body() body: PartyDto) {
+    await this.guard(authorization, true);
+    return this.service.party(body);
+  }
+
+  @Post('items')
+  async item(@Headers('authorization') authorization: string, @Body() body: ItemDto) {
+    await this.guard(authorization, true);
+    return this.service.item(body);
+  }
+}

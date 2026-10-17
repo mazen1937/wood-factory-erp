@@ -1,11 +1,13 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         x:Class="WoodFactoryErp.Desktop.MainWindow"
-        Title="نظام إدارة مصنع الأخشاب" Width="900" Height="580"
+        x:CompileBindings="False"
+        Title="نظام إدارة مصنع الأخشاب" Width="1180" Height="820"
+        MinWidth="900" MinHeight="650"
         WindowStartupLocation="CenterScreen">
-  <Grid Margin="48" RowDefinitions="Auto,*">
+  <Grid Margin="24" RowDefinitions="Auto,*">
     <TextBlock Text="نظام إدارة مصنع الأخشاب" FontSize="30" FontWeight="SemiBold" HorizontalAlignment="Right" />
-    <Grid Grid.Row="1" Margin="0,32,0,0">
+    <Grid Grid.Row="1" Margin="0,24,0,0">
       <Border x:Name="LoginPanel" Width="420" HorizontalAlignment="Center" VerticalAlignment="Center" Padding="30" CornerRadius="12" Background="{DynamicResource SystemControlBackgroundAltHighBrush}">
         <StackPanel Spacing="14">
           <TextBlock Text="تسجيل الدخول" FontSize="24" FontWeight="SemiBold" HorizontalAlignment="Right" />
@@ -19,31 +21,178 @@
           <TextBlock Text="الخادم المحلي: http://localhost:3000" HorizontalAlignment="Center" Opacity="0.55" FontSize="12" />
         </StackPanel>
       </Border>
-      <Border x:Name="WelcomePanel" IsVisible="False" Padding="20" CornerRadius="12" Background="{DynamicResource SystemControlBackgroundAltHighBrush}">
-  <Grid ColumnDefinitions="220,*" ColumnSpacing="20">
-    <StackPanel Grid.Column="0" Spacing="10">
-      <TextBlock Text="نظام المصنع" FontSize="20" FontWeight="SemiBold" HorizontalAlignment="Right" />
-      <TextBlock x:Name="WelcomeTextBlock" HorizontalAlignment="Right" />
-      <TextBlock x:Name="RolesTextBlock" TextWrapping="Wrap" HorizontalAlignment="Right" Opacity="0.7" />
-      <Separator />
-      <Button Content="الرئيسية" HorizontalAlignment="Stretch" />
-      <Button Content="البيانات الأساسية" HorizontalAlignment="Stretch" IsEnabled="False" />
-      <Button Content="المخزون" HorizontalAlignment="Stretch" IsEnabled="False" />
-      <Button Content="الإنتاج" HorizontalAlignment="Stretch" IsEnabled="False" />
-      <Button Content="المبيعات والمالية" HorizontalAlignment="Stretch" IsEnabled="False" />
-      <Button x:Name="AdminButton" Content="إدارة النظام" HorizontalAlignment="Stretch" />
-      <Button Click="SignOut" Content="تسجيل الخروج" HorizontalAlignment="Stretch" />
-    </StackPanel>
-    <StackPanel Grid.Column="1" Spacing="18" HorizontalAlignment="Right">
-      <TextBlock Text="الرئيسية" FontSize="28" FontWeight="SemiBold" HorizontalAlignment="Right" />
-      <TextBlock Text="مساحة العمل محمية. لا تظهر إلا بعد التحقق من جلسة API صالحة." FontSize="16" HorizontalAlignment="Right" />
-      <Border Padding="18" CornerRadius="8" Background="{DynamicResource SystemControlBackgroundAltLowBrush}">
-        <StackPanel Spacing="8"><TextBlock Text="حالة النظام" FontWeight="SemiBold" HorizontalAlignment="Right" /><TextBlock Text="تم تسجيل الدخول بنجاح. ستُضاف وحدات البيانات الأساسية والمخزون والإنتاج هنا في السبرنتات التالية." TextWrapping="Wrap" HorizontalAlignment="Right" /></StackPanel>
+
+      <Border x:Name="WelcomePanel" IsVisible="False" Padding="18" CornerRadius="12" Background="{DynamicResource SystemControlBackgroundAltHighBrush}">
+        <Grid ColumnDefinitions="220,*" ColumnSpacing="20">
+          <StackPanel Grid.Column="0" Spacing="10">
+            <TextBlock Text="نظام المصنع" FontSize="20" FontWeight="SemiBold" HorizontalAlignment="Right" />
+            <TextBlock x:Name="WelcomeTextBlock" HorizontalAlignment="Right" />
+            <TextBlock x:Name="RolesTextBlock" TextWrapping="Wrap" HorizontalAlignment="Right" Opacity="0.7" />
+            <Separator />
+            <Button Click="ShowHome" Content="الرئيسية" HorizontalAlignment="Stretch" />
+            <Button x:Name="MasterDataButton" Click="ShowMasterDataAsync" Content="البيانات الأساسية" HorizontalAlignment="Stretch" />
+            <Button x:Name="InventoryButton" Content="المخزون" HorizontalAlignment="Stretch" Click="ShowInventoryAsync" />
+            <Button Content="الإنتاج" HorizontalAlignment="Stretch" IsEnabled="False" />
+            <Button Content="المبيعات والمالية" HorizontalAlignment="Stretch" IsEnabled="False" />
+            <Button x:Name="AdminButton" Content="إدارة النظام" HorizontalAlignment="Stretch" />
+            <Button Click="SignOut" Content="تسجيل الخروج" HorizontalAlignment="Stretch" />
+          </StackPanel>
+
+          <Grid Grid.Column="1">
+            <ScrollViewer x:Name="HomePanel" VerticalScrollBarVisibility="Auto">
+              <StackPanel Spacing="18" HorizontalAlignment="Stretch">
+                <TextBlock Text="الرئيسية" FontSize="28" FontWeight="SemiBold" HorizontalAlignment="Right" />
+                <TextBlock Text="مساحة العمل محمية. لا تظهر إلا بعد التحقق من جلسة API صالحة." FontSize="16" HorizontalAlignment="Right" TextWrapping="Wrap" />
+                <Border Padding="18" CornerRadius="8" Background="{DynamicResource SystemControlBackgroundAltLowBrush}">
+                  <StackPanel Spacing="8">
+                    <TextBlock Text="حالة النظام" FontWeight="SemiBold" HorizontalAlignment="Right" />
+                    <TextBlock Text="تم تسجيل الدخول بنجاح. يجري استكمال البيانات الأساسية قبل الانتقال إلى المخزون والإنتاج." TextWrapping="Wrap" HorizontalAlignment="Right" />
+                  </StackPanel>
+                </Border>
+              </StackPanel>
+            </ScrollViewer>
+
+            <ScrollViewer x:Name="MasterDataPanel" IsVisible="False" VerticalScrollBarVisibility="Auto">
+              <StackPanel Spacing="14">
+                <Grid ColumnDefinitions="*,Auto">
+                  <TextBlock Grid.Column="1" Text="البيانات الأساسية" FontSize="28" FontWeight="SemiBold" HorizontalAlignment="Right" VerticalAlignment="Center" />
+                  <Button Grid.Column="0" x:Name="RefreshMasterDataButton" Click="RefreshMasterDataAsync" Content="تحديث البيانات" HorizontalAlignment="Left" />
+                </Grid>
+                <TextBlock Text="إدارة الوحدات والمخازن والعملاء والموردين والأصناف التي يعتمد عليها باقي النظام." HorizontalAlignment="Right" Opacity="0.75" TextWrapping="Wrap" />
+                <TextBlock x:Name="MasterDataMessageTextBlock" HorizontalAlignment="Right" TextWrapping="Wrap" />
+
+                <TabControl TabStripPlacement="Top">
+                  <TabItem Header="وحدات القياس">
+                    <StackPanel Margin="8" Spacing="10">
+                      <TextBlock Text="إضافة وحدة قياس" FontSize="19" FontWeight="SemiBold" HorizontalAlignment="Right" />
+                      <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto,Auto,Auto" ColumnSpacing="12" RowSpacing="8">
+                        <TextBlock Grid.Row="0" Grid.Column="1" Text="الكود" HorizontalAlignment="Right" />
+                        <TextBox x:Name="UnitCodeTextBox" Grid.Row="0" Grid.Column="0" Watermark="مثال: PCS" />
+                        <TextBlock Grid.Row="1" Grid.Column="1" Text="الاسم بالعربية" HorizontalAlignment="Right" />
+                        <TextBox x:Name="UnitNameArTextBox" Grid.Row="1" Grid.Column="0" Watermark="قطعة" />
+                        <TextBlock Grid.Row="2" Grid.Column="1" Text="الاسم بالإنجليزية" HorizontalAlignment="Right" />
+                        <TextBox x:Name="UnitNameEnTextBox" Grid.Row="2" Grid.Column="0" Watermark="Piece" />
+                        <TextBlock Grid.Row="3" Grid.Column="1" Text="عدد الخانات العشرية" HorizontalAlignment="Right" />
+                        <TextBox x:Name="UnitPrecisionTextBox" Grid.Row="3" Grid.Column="0" Text="0" />
+                      </Grid>
+                      <Button x:Name="SaveUnitButton" Click="SaveUnitAsync" Content="حفظ الوحدة" HorizontalAlignment="Right" MinWidth="150" />
+                      <Separator />
+                      <TextBlock Text="الوحدات المسجلة" FontWeight="SemiBold" FontSize="17" HorizontalAlignment="Right" />
+                      <TextBlock x:Name="UnitsTextBlock" Text="لا توجد بيانات بعد." TextWrapping="Wrap" HorizontalAlignment="Stretch" />
+                    </StackPanel>
+                  </TabItem>
+
+                  <TabItem Header="المخازن">
+                    <StackPanel Margin="8" Spacing="10">
+                      <TextBlock Text="إضافة مخزن" FontSize="19" FontWeight="SemiBold" HorizontalAlignment="Right" />
+                      <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto,Auto,Auto" ColumnSpacing="12" RowSpacing="8">
+                        <TextBlock Grid.Row="0" Grid.Column="1" Text="الكود" HorizontalAlignment="Right" />
+                        <TextBox x:Name="WarehouseCodeTextBox" Grid.Row="0" Grid.Column="0" Watermark="مثال: RAW-01" />
+                        <TextBlock Grid.Row="1" Grid.Column="1" Text="الاسم بالعربية" HorizontalAlignment="Right" />
+                        <TextBox x:Name="WarehouseNameArTextBox" Grid.Row="1" Grid.Column="0" Watermark="مخزن الخامات" />
+                        <TextBlock Grid.Row="2" Grid.Column="1" Text="الاسم بالإنجليزية" HorizontalAlignment="Right" />
+                        <TextBox x:Name="WarehouseNameEnTextBox" Grid.Row="2" Grid.Column="0" Watermark="Raw Materials" />
+                        <TextBlock Grid.Row="3" Grid.Column="1" Text="نوع المخزن" HorizontalAlignment="Right" />
+                        <ComboBox x:Name="WarehouseTypeComboBox" Grid.Row="3" Grid.Column="0"><ComboBox.ItemTemplate><DataTemplate><TextBlock Text="{Binding Label}" /></DataTemplate></ComboBox.ItemTemplate></ComboBox>
+                      </Grid>
+                      <Button x:Name="SaveWarehouseButton" Click="SaveWarehouseAsync" Content="حفظ المخزن" HorizontalAlignment="Right" MinWidth="150" />
+                      <Separator />
+                      <TextBlock Text="المخازن المسجلة" FontWeight="SemiBold" FontSize="17" HorizontalAlignment="Right" />
+                      <TextBlock x:Name="WarehousesTextBlock" Text="لا توجد بيانات بعد." TextWrapping="Wrap" />
+                    </StackPanel>
+                  </TabItem>
+
+                  <TabItem Header="العملاء والموردون">
+                    <StackPanel Margin="8" Spacing="10">
+                      <TextBlock Text="إضافة عميل أو مورد" FontSize="19" FontWeight="SemiBold" HorizontalAlignment="Right" />
+                      <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto" ColumnSpacing="12" RowSpacing="8">
+                        <TextBlock Grid.Row="0" Grid.Column="1" Text="الكود" HorizontalAlignment="Right" />
+                        <TextBox x:Name="PartyCodeTextBox" Grid.Row="0" Grid.Column="0" Watermark="مثال: C-001" />
+                        <TextBlock Grid.Row="1" Grid.Column="1" Text="النوع" HorizontalAlignment="Right" />
+                        <ComboBox x:Name="PartyTypeComboBox" Grid.Row="1" Grid.Column="0"><ComboBox.ItemTemplate><DataTemplate><TextBlock Text="{Binding Label}" /></DataTemplate></ComboBox.ItemTemplate></ComboBox>
+                        <TextBlock Grid.Row="2" Grid.Column="1" Text="الاسم بالعربية" HorizontalAlignment="Right" />
+                        <TextBox x:Name="PartyNameArTextBox" Grid.Row="2" Grid.Column="0" />
+                        <TextBlock Grid.Row="3" Grid.Column="1" Text="الاسم بالإنجليزية (اختياري)" HorizontalAlignment="Right" />
+                        <TextBox x:Name="PartyNameEnTextBox" Grid.Row="3" Grid.Column="0" />
+                        <TextBlock Grid.Row="4" Grid.Column="1" Text="رقم الهاتف (اختياري)" HorizontalAlignment="Right" />
+                        <TextBox x:Name="PartyPhoneTextBox" Grid.Row="4" Grid.Column="0" />
+                      </Grid>
+                      <Button x:Name="SavePartyButton" Click="SavePartyAsync" Content="حفظ العميل / المورد" HorizontalAlignment="Right" MinWidth="180" />
+                      <Separator />
+                      <TextBlock Text="العملاء والموردون المسجلون" FontWeight="SemiBold" FontSize="17" HorizontalAlignment="Right" />
+                      <TextBlock x:Name="PartiesTextBlock" Text="لا توجد بيانات بعد." TextWrapping="Wrap" />
+                    </StackPanel>
+                  </TabItem>
+
+                  <TabItem Header="الأصناف">
+                    <StackPanel Margin="8" Spacing="10">
+                      <TextBlock Text="إضافة صنف" FontSize="19" FontWeight="SemiBold" HorizontalAlignment="Right" />
+                      <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto" ColumnSpacing="12" RowSpacing="8">
+                        <TextBlock Grid.Row="0" Grid.Column="1" Text="الكود" HorizontalAlignment="Right" />
+                        <TextBox x:Name="ItemCodeTextBox" Grid.Row="0" Grid.Column="0" Watermark="مثال: WOOD-001" />
+                        <TextBlock Grid.Row="1" Grid.Column="1" Text="الاسم بالعربية" HorizontalAlignment="Right" />
+                        <TextBox x:Name="ItemNameArTextBox" Grid.Row="1" Grid.Column="0" />
+                        <TextBlock Grid.Row="2" Grid.Column="1" Text="الاسم بالإنجليزية (اختياري)" HorizontalAlignment="Right" />
+                        <TextBox x:Name="ItemNameEnTextBox" Grid.Row="2" Grid.Column="0" />
+                        <TextBlock Grid.Row="3" Grid.Column="1" Text="نوع الصنف" HorizontalAlignment="Right" />
+                        <ComboBox x:Name="ItemTypeComboBox" Grid.Row="3" Grid.Column="0"><ComboBox.ItemTemplate><DataTemplate><TextBlock Text="{Binding Label}" /></DataTemplate></ComboBox.ItemTemplate></ComboBox>
+                        <TextBlock Grid.Row="4" Grid.Column="1" Text="وحدة القياس الأساسية" HorizontalAlignment="Right" />
+                        <ComboBox x:Name="ItemBaseUnitComboBox" Grid.Row="4" Grid.Column="0"><ComboBox.ItemTemplate><DataTemplate><TextBlock Text="{Binding Label}" /></DataTemplate></ComboBox.ItemTemplate></ComboBox>
+                        <TextBlock Grid.Row="5" Grid.Column="1" Text="التصنيف" HorizontalAlignment="Right" />
+                        <ComboBox x:Name="ItemClassificationComboBox" Grid.Row="5" Grid.Column="0"><ComboBox.ItemTemplate><DataTemplate><TextBlock Text="{Binding Label}" /></DataTemplate></ComboBox.ItemTemplate></ComboBox>
+                      </Grid>
+                      <CheckBox x:Name="ItemStockTrackedCheckBox" Content="يُتابع رصيد الصنف في المخزن" IsChecked="True" HorizontalAlignment="Right" />
+                      <Button x:Name="SaveItemButton" Click="SaveItemAsync" Content="حفظ الصنف" HorizontalAlignment="Right" MinWidth="150" />
+                      <Separator />
+                      <TextBlock Text="الأصناف المسجلة" FontWeight="SemiBold" FontSize="17" HorizontalAlignment="Right" />
+                      <TextBlock x:Name="ItemsTextBlock" Text="لا توجد بيانات بعد." TextWrapping="Wrap" />
+                    </StackPanel>
+                  </TabItem>
+                </TabControl>
+              </StackPanel>
+            </ScrollViewer>
+
+            <ScrollViewer x:Name="InventoryPanel" IsVisible="False" VerticalScrollBarVisibility="Auto">
+              <StackPanel Spacing="14">
+                <Grid ColumnDefinitions="*,Auto">
+                  <TextBlock Grid.Column="1" Text="المخزون" FontSize="28" FontWeight="SemiBold" HorizontalAlignment="Right" VerticalAlignment="Center" />
+                  <Button Grid.Column="0" x:Name="RefreshInventoryButton" Click="RefreshInventoryAsync" Content="تحديث المخزون" HorizontalAlignment="Left" />
+                </Grid>
+                <TextBlock Text="تسجيل استلام خامات. يتم اعتماد الحركة وحساب متوسط التكلفة على الخادم المركزي." HorizontalAlignment="Right" TextWrapping="Wrap" Opacity="0.8" />
+                <TextBlock x:Name="InventoryMessageTextBlock" HorizontalAlignment="Right" TextWrapping="Wrap" />
+                <Border Padding="14" CornerRadius="8" Background="{DynamicResource SystemControlBackgroundAltLowBrush}">
+                  <StackPanel Spacing="10">
+                    <TextBlock Text="استلام خامات جديدة" FontSize="20" FontWeight="SemiBold" HorizontalAlignment="Right" />
+                    <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto" ColumnSpacing="12" RowSpacing="8">
+                      <TextBlock Grid.Row="0" Grid.Column="1" Text="الصنف" HorizontalAlignment="Right" />
+                      <ComboBox x:Name="ReceiptItemComboBox" Grid.Row="0" Grid.Column="0"><ComboBox.ItemTemplate><DataTemplate><TextBlock Text="{Binding Label}" /></DataTemplate></ComboBox.ItemTemplate></ComboBox>
+                      <TextBlock Grid.Row="1" Grid.Column="1" Text="مخزن الخامات" HorizontalAlignment="Right" />
+                      <ComboBox x:Name="ReceiptWarehouseComboBox" Grid.Row="1" Grid.Column="0"><ComboBox.ItemTemplate><DataTemplate><TextBlock Text="{Binding Label}" /></DataTemplate></ComboBox.ItemTemplate></ComboBox>
+                      <TextBlock Grid.Row="2" Grid.Column="1" Text="المورد (اختياري)" HorizontalAlignment="Right" />
+                      <ComboBox x:Name="ReceiptSupplierComboBox" Grid.Row="2" Grid.Column="0"><ComboBox.ItemTemplate><DataTemplate><TextBlock Text="{Binding Label}" /></DataTemplate></ComboBox.ItemTemplate></ComboBox>
+                      <TextBlock Grid.Row="3" Grid.Column="1" Text="رقم مستند الشراء / المرجع" HorizontalAlignment="Right" />
+                      <TextBox x:Name="ReceiptReferenceTextBox" Grid.Row="3" Grid.Column="0" Watermark="مثال: GRN-0001" />
+                      <TextBlock Grid.Row="4" Grid.Column="1" Text="تاريخ الاستلام (YYYY-MM-DD)" HorizontalAlignment="Right" />
+                      <TextBox x:Name="ReceiptDateTextBox" Grid.Row="4" Grid.Column="0" />
+                      <TextBlock Grid.Row="5" Grid.Column="1" Text="الكمية" HorizontalAlignment="Right" />
+                      <TextBox x:Name="ReceiptQuantityTextBox" Grid.Row="5" Grid.Column="0" Watermark="مثال: 10" />
+                      <TextBlock Grid.Row="6" Grid.Column="1" Text="تكلفة الوحدة بالجنيه" HorizontalAlignment="Right" />
+                      <TextBox x:Name="ReceiptUnitCostTextBox" Grid.Row="6" Grid.Column="0" Watermark="مثال: 100" />
+                    </Grid>
+                    <TextBlock Text="ملاحظات (اختياري)" HorizontalAlignment="Right" />
+                    <TextBox x:Name="ReceiptNotesTextBox" Watermark="ملاحظات الاستلام" />
+                    <Button x:Name="PostReceiptButton" Click="PostReceiptAsync" Content="تأكيد استلام الخامات" HorizontalAlignment="Right" MinWidth="180" />
+                  </StackPanel>
+                </Border>
+                <TextBlock Text="أرصدة المخزون الحالية" FontSize="20" FontWeight="SemiBold" HorizontalAlignment="Right" />
+                <TextBlock x:Name="InventoryBalancesTextBlock" Text="لا توجد أرصدة مخزون بعد." TextWrapping="Wrap" />
+                <TextBlock Text="آخر حركات المخزون" FontSize="20" FontWeight="SemiBold" HorizontalAlignment="Right" />
+                <TextBlock x:Name="InventoryMovementsTextBlock" Text="لا توجد حركات بعد." TextWrapping="Wrap" />
+              </StackPanel>
+            </ScrollViewer>
+          </Grid>
+        </Grid>
       </Border>
-    </StackPanel>
-  </Grid>
-</Border>
     </Grid>
   </Grid>
 </Window>
-
