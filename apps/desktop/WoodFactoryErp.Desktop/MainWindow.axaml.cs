@@ -12,9 +12,9 @@ public partial class MainWindow : Window
 {
     private static readonly HttpClient HttpClient = new() { BaseAddress = new Uri("http://localhost:3000/api/") };
     private string? accessToken;
-    private Border LoginPanel = null!; private Border WelcomePanel = null!; private TextBox UsernameTextBox = null!; private TextBox PasswordTextBox = null!; private TextBlock LoginMessageTextBlock = null!; private TextBlock WelcomeTextBlock = null!; private TextBlock RolesTextBlock = null!; private Button SignInButton = null!;
+    private Border LoginPanel = null!; private Border WelcomePanel = null!; private TextBox UsernameTextBox = null!; private TextBox PasswordTextBox = null!; private TextBlock LoginMessageTextBlock = null!; private TextBlock WelcomeTextBlock = null!; private TextBlock RolesTextBlock = null!; private Button SignInButton = null!; private Button AdminButton = null!;
 
-    public MainWindow() { AvaloniaXamlLoader.Load(this); LoginPanel = this.FindControl<Border>("LoginPanel")!; WelcomePanel = this.FindControl<Border>("WelcomePanel")!; UsernameTextBox = this.FindControl<TextBox>("UsernameTextBox")!; PasswordTextBox = this.FindControl<TextBox>("PasswordTextBox")!; LoginMessageTextBlock = this.FindControl<TextBlock>("LoginMessageTextBlock")!; WelcomeTextBlock = this.FindControl<TextBlock>("WelcomeTextBlock")!; RolesTextBlock = this.FindControl<TextBlock>("RolesTextBlock")!; SignInButton = this.FindControl<Button>("SignInButton")!; _ = RestoreSessionAsync(); }
+    public MainWindow() { AvaloniaXamlLoader.Load(this); LoginPanel = this.FindControl<Border>("LoginPanel")!; WelcomePanel = this.FindControl<Border>("WelcomePanel")!; UsernameTextBox = this.FindControl<TextBox>("UsernameTextBox")!; PasswordTextBox = this.FindControl<TextBox>("PasswordTextBox")!; LoginMessageTextBlock = this.FindControl<TextBlock>("LoginMessageTextBlock")!; WelcomeTextBlock = this.FindControl<TextBlock>("WelcomeTextBlock")!; RolesTextBlock = this.FindControl<TextBlock>("RolesTextBlock")!; SignInButton = this.FindControl<Button>("SignInButton")!; AdminButton = this.FindControl<Button>("AdminButton")!; _ = RestoreSessionAsync(); }
 
     private async void SignInAsync(object? sender, RoutedEventArgs e)
     {
@@ -35,7 +35,7 @@ public partial class MainWindow : Window
             LoginPanel.IsVisible = false;
             WelcomePanel.IsVisible = true;
             WelcomeTextBlock.Text = $"مرحباً، {result.User.DisplayName}";
-            RolesTextBlock.Text = $"الصلاحيات: {string.Join("، ", result.User.Roles)}";
+            RolesTextBlock.Text = $"الصلاحيات: {string.Join("، ", result.User.Roles)}"; AdminButton.IsVisible = result.User.Roles.Contains("system_admin");
             PasswordTextBox.Text = string.Empty;
         }
         catch (HttpRequestException)
@@ -63,7 +63,7 @@ public partial class MainWindow : Window
             if (session is null) { SessionStore.Delete(); return; }
             accessToken = stored; LoginPanel.IsVisible = false; WelcomePanel.IsVisible = true;
             WelcomeTextBlock.Text = $"مرحباً، {session.Username}";
-            RolesTextBlock.Text = $"الصلاحيات: {string.Join("، ", session.Roles)}";
+            RolesTextBlock.Text = $"الصلاحيات: {string.Join("، ", session.Roles)}"; AdminButton.IsVisible = session.Roles.Contains("system_admin");
         }
         catch { SessionStore.Delete(); }
     }
@@ -79,6 +79,7 @@ public partial class MainWindow : Window
     private sealed record LoginResponse(string AccessToken, UserProfile User);
     private sealed record UserProfile(string Id, string Username, string DisplayName, string[] Roles);
 }
+
 
 
 

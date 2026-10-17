@@ -19,15 +19,31 @@
           <TextBlock Text="الخادم المحلي: http://localhost:3000" HorizontalAlignment="Center" Opacity="0.55" FontSize="12" />
         </StackPanel>
       </Border>
-      <Border x:Name="WelcomePanel" IsVisible="False" Width="560" HorizontalAlignment="Center" VerticalAlignment="Center" Padding="32" CornerRadius="12" Background="{DynamicResource SystemControlBackgroundAltHighBrush}">
-        <StackPanel Spacing="16">
-          <TextBlock Text="تم تسجيل الدخول بنجاح" FontSize="26" FontWeight="SemiBold" HorizontalAlignment="Right" />
-          <TextBlock x:Name="WelcomeTextBlock" FontSize="18" HorizontalAlignment="Right" />
-          <TextBlock x:Name="RolesTextBlock" HorizontalAlignment="Right" />
-          <TextBlock Text="جلسة التطوير هذه محفوظة في الذاكرة فقط. ستكون الخطوة التالية إضافة تخزين آمن للجلسة وشاشات محمية." TextWrapping="Wrap" HorizontalAlignment="Right" Opacity="0.75" />
-          <Button Click="SignOut" HorizontalAlignment="Stretch" Content="تسجيل الخروج" />
-        </StackPanel>
+      <Border x:Name="WelcomePanel" IsVisible="False" Padding="20" CornerRadius="12" Background="{DynamicResource SystemControlBackgroundAltHighBrush}">
+  <Grid ColumnDefinitions="220,*" ColumnSpacing="20">
+    <StackPanel Grid.Column="0" Spacing="10">
+      <TextBlock Text="نظام المصنع" FontSize="20" FontWeight="SemiBold" HorizontalAlignment="Right" />
+      <TextBlock x:Name="WelcomeTextBlock" HorizontalAlignment="Right" />
+      <TextBlock x:Name="RolesTextBlock" TextWrapping="Wrap" HorizontalAlignment="Right" Opacity="0.7" />
+      <Separator />
+      <Button Content="الرئيسية" HorizontalAlignment="Stretch" />
+      <Button Content="البيانات الأساسية" HorizontalAlignment="Stretch" IsEnabled="False" />
+      <Button Content="المخزون" HorizontalAlignment="Stretch" IsEnabled="False" />
+      <Button Content="الإنتاج" HorizontalAlignment="Stretch" IsEnabled="False" />
+      <Button Content="المبيعات والمالية" HorizontalAlignment="Stretch" IsEnabled="False" />
+      <Button x:Name="AdminButton" Content="إدارة النظام" HorizontalAlignment="Stretch" />
+      <Button Click="SignOut" Content="تسجيل الخروج" HorizontalAlignment="Stretch" />
+    </StackPanel>
+    <StackPanel Grid.Column="1" Spacing="18" HorizontalAlignment="Right">
+      <TextBlock Text="الرئيسية" FontSize="28" FontWeight="SemiBold" HorizontalAlignment="Right" />
+      <TextBlock Text="مساحة العمل محمية. لا تظهر إلا بعد التحقق من جلسة API صالحة." FontSize="16" HorizontalAlignment="Right" />
+      <Border Padding="18" CornerRadius="8" Background="{DynamicResource SystemControlBackgroundAltLowBrush}">
+        <StackPanel Spacing="8"><TextBlock Text="حالة النظام" FontWeight="SemiBold" HorizontalAlignment="Right" /><TextBlock Text="تم تسجيل الدخول بنجاح. ستُضاف وحدات البيانات الأساسية والمخزون والإنتاج هنا في السبرنتات التالية." TextWrapping="Wrap" HorizontalAlignment="Right" /></StackPanel>
       </Border>
+    </StackPanel>
+  </Grid>
+</Border>
     </Grid>
   </Grid>
 </Window>
+
