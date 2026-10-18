@@ -32,6 +32,7 @@
             <Button Click="ShowHome" Content="الرئيسية" HorizontalAlignment="Stretch" />
             <Button x:Name="MasterDataButton" Click="ShowMasterDataAsync" Content="البيانات الأساسية" HorizontalAlignment="Stretch" />
             <Button x:Name="InventoryButton" Content="المخزون" HorizontalAlignment="Stretch" Click="ShowInventoryAsync" />
+            <Button x:Name="OrdersButton" Content="الطلبات والملف الفني" HorizontalAlignment="Stretch" Click="ShowOrdersAsync" />
             <Button Content="الإنتاج" HorizontalAlignment="Stretch" IsEnabled="False" />
             <Button Content="المبيعات والمالية" HorizontalAlignment="Stretch" IsEnabled="False" />
             <Button x:Name="AdminButton" Content="إدارة النظام" HorizontalAlignment="Stretch" />
@@ -188,6 +189,202 @@
                 <TextBlock x:Name="InventoryBalancesTextBlock" Text="لا توجد أرصدة مخزون بعد." TextWrapping="Wrap" />
                 <TextBlock Text="آخر حركات المخزون" FontSize="20" FontWeight="SemiBold" HorizontalAlignment="Right" />
                 <TextBlock x:Name="InventoryMovementsTextBlock" Text="لا توجد حركات بعد." TextWrapping="Wrap" />
+              </StackPanel>
+            </ScrollViewer>
+
+            <ScrollViewer x:Name="OrdersPanel" IsVisible="False" VerticalScrollBarVisibility="Auto">
+              <StackPanel Spacing="14">
+                <Grid ColumnDefinitions="*,Auto">
+                  <TextBlock Grid.Column="1" Text="الطلبات والملف الفني" FontSize="28" FontWeight="SemiBold" HorizontalAlignment="Right" VerticalAlignment="Center" />
+                  <Button Grid.Column="0" x:Name="RefreshOrdersButton" Click="RefreshOrdersAsync" Content="تحديث" HorizontalAlignment="Left" />
+                </Grid>
+                <TextBlock Text="تسجيل طلب العميل، استلام نسخ الملف الفني من المهندس الخارجي، وإعداد قائمة الخامات والقص. المهندس الخارجي لا يحتاج إلى حساب في النظام." HorizontalAlignment="Right" TextWrapping="Wrap" Opacity="0.8" />
+                <TextBlock x:Name="OrdersMessageTextBlock" HorizontalAlignment="Right" TextWrapping="Wrap" />
+                <Border Padding="12" CornerRadius="8" Background="{DynamicResource SystemControlBackgroundAltLowBrush}">
+                  <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12">
+                    <TextBlock Grid.Column="0" Text="الطلب المحدد" VerticalAlignment="Center" />
+                    <ComboBox x:Name="SelectedOrderComboBox" Grid.Column="1" SelectionChanged="SelectedOrderChanged">
+                      <ComboBox.ItemTemplate><DataTemplate><TextBlock Text="{Binding Label}" /></DataTemplate></ComboBox.ItemTemplate>
+                    </ComboBox>
+                  </Grid>
+                </Border>
+                <TabControl TabStripPlacement="Top">
+                  <TabItem Header="طلبات العملاء">
+                    <StackPanel Margin="8" Spacing="10">
+                      <TextBlock Text="تسجيل طلب عميل جديد" FontSize="19" FontWeight="SemiBold" HorizontalAlignment="Right" />
+                      <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto" ColumnSpacing="12" RowSpacing="8">
+                        <TextBlock Grid.Row="0" Grid.Column="1" Text="رقم الطلب" HorizontalAlignment="Right" />
+                        <TextBox x:Name="OrderNumberTextBox" Grid.Row="0" Grid.Column="0" Watermark="مثال: SO-2026-001" />
+                        <TextBlock Grid.Row="1" Grid.Column="1" Text="العميل" HorizontalAlignment="Right" />
+                        <ComboBox x:Name="OrderCustomerComboBox" Grid.Row="1" Grid.Column="0"><ComboBox.ItemTemplate><DataTemplate><TextBlock Text="{Binding Label}" /></DataTemplate></ComboBox.ItemTemplate></ComboBox>
+                        <TextBlock Grid.Row="2" Grid.Column="1" Text="تاريخ الطلب" HorizontalAlignment="Right" />
+                        <TextBox x:Name="OrderDateTextBox" Grid.Row="2" Grid.Column="0" Watermark="YYYY-MM-DD" />
+                        <TextBlock Grid.Row="3" Grid.Column="1" Text="تاريخ التسليم المطلوب (اختياري)" HorizontalAlignment="Right" />
+                        <TextBox x:Name="OrderDeliveryDateTextBox" Grid.Row="3" Grid.Column="0" Watermark="YYYY-MM-DD" />
+                        <TextBlock Grid.Row="4" Grid.Column="1" Text="ملاحظات الطلب" HorizontalAlignment="Right" />
+                        <TextBox x:Name="OrderNotesTextBox" Grid.Row="4" Grid.Column="0" />
+                      </Grid>
+                      <Button x:Name="CreateOrderButton" Click="CreateCustomerOrderAsync" Content="حفظ طلب العميل" HorizontalAlignment="Right" MinWidth="170" />
+                      <Separator />
+                      <TextBlock Text="الطلبات المسجلة" FontWeight="SemiBold" FontSize="17" HorizontalAlignment="Right" />
+                      <TextBlock x:Name="OrdersListTextBlock" Text="لا توجد طلبات بعد." TextWrapping="Wrap" />
+                    </StackPanel>
+                  </TabItem>
+
+                  <TabItem Header="النسخ الفنية وقائمة الخامات / القص">
+                    <StackPanel Margin="8" Spacing="10">
+                      <TextBlock Text="إنشاء نسخة فنية جديدة" FontSize="19" FontWeight="SemiBold" HorizontalAlignment="Right" />
+                      <TextBlock Text="كل تعديل جوهري يُسجل كنسخة جديدة. بعد تثبيت النسخة تصبح بياناتها غير قابلة للتعديل، وتظل النسخ السابقة محفوظة." HorizontalAlignment="Right" TextWrapping="Wrap" />
+                      <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto" ColumnSpacing="12" RowSpacing="8">
+                        <TextBlock Grid.Row="0" Grid.Column="1" Text="مرجع الرسم / الملف الفني" HorizontalAlignment="Right" />
+                        <TextBox x:Name="EngineeringReferenceTextBox" Grid.Row="0" Grid.Column="0" Watermark="رقم الرسم أو مرجع المهندس" />
+                        <TextBlock Grid.Row="1" Grid.Column="1" Text="ملاحظات النسخة" HorizontalAlignment="Right" />
+                        <TextBox x:Name="EngineeringNotesTextBox" Grid.Row="1" Grid.Column="0" />
+                      </Grid>
+                      <Button x:Name="CreateEngineeringPackageButton" Click="CreateEngineeringPackageAsync" Content="إنشاء نسخة فنية مسودة" HorizontalAlignment="Right" MinWidth="210" />
+                      <Separator />
+                      <TextBlock Text="النسخ الفنية للطلب المحدد" FontWeight="SemiBold" FontSize="17" HorizontalAlignment="Right" />
+                      <ComboBox x:Name="EngineeringPackageComboBox" SelectionChanged="EngineeringPackageChanged"><ComboBox.ItemTemplate><DataTemplate><TextBlock Text="{Binding Label}" /></DataTemplate></ComboBox.ItemTemplate></ComboBox>
+                      <TextBlock x:Name="EngineeringPackageSummaryTextBlock" TextWrapping="Wrap" />
+                      <Border Padding="12" CornerRadius="8" Background="{DynamicResource SystemControlBackgroundAltLowBrush}">
+                        <StackPanel Spacing="8">
+                          <TextBlock Text="إضافة بند لقائمة الخامات أو القص" FontSize="17" FontWeight="SemiBold" HorizontalAlignment="Right" />
+                          <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto" ColumnSpacing="12" RowSpacing="8">
+                            <TextBlock Grid.Row="0" Grid.Column="1" Text="نوع البند" HorizontalAlignment="Right" />
+                            <ComboBox x:Name="EngineeringLineTypeComboBox" Grid.Row="0" Grid.Column="0"><ComboBox.ItemTemplate><DataTemplate><TextBlock Text="{Binding Label}" /></DataTemplate></ComboBox.ItemTemplate></ComboBox>
+                            <TextBlock Grid.Row="1" Grid.Column="1" Text="وصف الخامة / الجزء" HorizontalAlignment="Right" />
+                            <TextBox x:Name="EngineeringLineDescriptionTextBox" Grid.Row="1" Grid.Column="0" />
+                            <TextBlock Grid.Row="2" Grid.Column="1" Text="مرجع الخامة (اختياري)" HorizontalAlignment="Right" />
+                            <TextBox x:Name="EngineeringLineMaterialReferenceTextBox" Grid.Row="2" Grid.Column="0" />
+                            <TextBlock Grid.Row="3" Grid.Column="1" Text="الكمية" HorizontalAlignment="Right" />
+                            <TextBox x:Name="EngineeringLineQuantityTextBox" Grid.Row="3" Grid.Column="0" Watermark="مثال: 2" />
+                            <TextBlock Grid.Row="4" Grid.Column="1" Text="وحدة القياس" HorizontalAlignment="Right" />
+                            <TextBox x:Name="EngineeringLineUnitTextBox" Grid.Row="4" Grid.Column="0" Watermark="مثال: PCS أو M" />
+                          </Grid>
+                          <TextBlock Text="الأبعاد / المقاسات" HorizontalAlignment="Right" />
+                          <TextBox x:Name="EngineeringLineDimensionsTextBox" Watermark="مثال: 1200 × 600 × 18 mm" />
+                          <TextBlock Text="ملاحظات البند (اختياري)" HorizontalAlignment="Right" />
+                          <TextBox x:Name="EngineeringLineNotesTextBox" />
+                          <Button x:Name="AddEngineeringLineButton" Click="AddEngineeringLineAsync" Content="إضافة البند" HorizontalAlignment="Right" MinWidth="150" />
+                        </StackPanel>
+                      </Border>
+                      <Separator />
+                      <TextBlock Text="مخرجات المهندس وتصنيف المرفقات" FontSize="18" FontWeight="SemiBold" HorizontalAlignment="Right" />
+                      <TextBlock Text="ارفع صورة المنتج والرسم الهندسي ومخططات الكاتلست. عند اختيار الكاتلست، سجّل نوع اللوح ولونه وسمكه ومقاسه وعدد الألواح كما يظهر في مخرجات المهندس." TextWrapping="Wrap" HorizontalAlignment="Right" Opacity="0.8" />
+                      <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto,Auto,Auto" ColumnSpacing="12" RowSpacing="8">
+                        <TextBlock Grid.Row="0" Grid.Column="1" Text="نوع المرفق" HorizontalAlignment="Right" />
+                        <ComboBox x:Name="EngineeringAttachmentTypeComboBox" Grid.Row="0" Grid.Column="0"><ComboBox.ItemTemplate><DataTemplate><TextBlock Text="{Binding Label}" /></DataTemplate></ComboBox.ItemTemplate></ComboBox>
+                        <TextBlock Grid.Row="1" Grid.Column="1" Text="وصف المرفق (اختياري)" HorizontalAlignment="Right" />
+                        <TextBox x:Name="EngineeringAttachmentDescriptionTextBox" Grid.Row="1" Grid.Column="0" />
+                        <TextBlock Grid.Row="2" Grid.Column="1" Text="كود / نوع اللوح (للكاتلست)" HorizontalAlignment="Right" />
+                        <TextBox x:Name="EngineeringMaterialCodeTextBox" Grid.Row="2" Grid.Column="0" Watermark="مثال: MDF 17 mm" />
+                        <TextBlock Grid.Row="3" Grid.Column="1" Text="اللون / التشطيب (للكاتلست)" HorizontalAlignment="Right" />
+                        <TextBox x:Name="EngineeringMaterialColorTextBox" Grid.Row="3" Grid.Column="0" Watermark="مثال: بني أو أبيض" />
+                      </Grid>
+                      <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto" ColumnSpacing="12" RowSpacing="8">
+                        <TextBlock Grid.Row="0" Grid.Column="1" Text="سمك اللوح (مم)" HorizontalAlignment="Right" />
+                        <TextBox x:Name="EngineeringBoardThicknessTextBox" Grid.Row="0" Grid.Column="0" Watermark="مثال: 17" />
+                        <TextBlock Grid.Row="1" Grid.Column="1" Text="طول اللوح (مم)" HorizontalAlignment="Right" />
+                        <TextBox x:Name="EngineeringBoardLengthTextBox" Grid.Row="1" Grid.Column="0" Watermark="مثال: 2420" />
+                      </Grid>
+                      <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto" ColumnSpacing="12" RowSpacing="8">
+                        <TextBlock Grid.Row="0" Grid.Column="1" Text="عرض اللوح (مم)" HorizontalAlignment="Right" />
+                        <TextBox x:Name="EngineeringBoardWidthTextBox" Grid.Row="0" Grid.Column="0" Watermark="مثال: 1210" />
+                        <TextBlock Grid.Row="1" Grid.Column="1" Text="عدد الألواح المستخدمة" HorizontalAlignment="Right" />
+                        <TextBox x:Name="EngineeringBoardQuantityTextBox" Grid.Row="1" Grid.Column="0" Watermark="العدد حسب مخطط الكاتلست" />
+                      </Grid>
+                      <TextBlock Text="مرفقات النسخة الفنية" FontSize="17" FontWeight="SemiBold" HorizontalAlignment="Right" />
+                      <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10">
+                        <Button x:Name="UploadEngineeringFileButton" Grid.Column="0" Click="UploadEngineeringFileAsync" Content="رفع ملف" />
+                        <ComboBox x:Name="EngineeringPackageFileComboBox" Grid.Column="1"><ComboBox.ItemTemplate><DataTemplate><TextBlock Text="{Binding Label}" /></DataTemplate></ComboBox.ItemTemplate></ComboBox>
+                      </Grid>
+                      <Button x:Name="DownloadEngineeringFileButton" Click="DownloadEngineeringFileAsync" Content="تنزيل المرفق المحدد" HorizontalAlignment="Right" />
+                      <Border Padding="12" CornerRadius="8" Background="{DynamicResource SystemControlBackgroundAltLowBrush}">
+                        <StackPanel Spacing="8">
+                          <TextBlock Text="تفاصيل القطع في الكاتلست" FontSize="17" FontWeight="SemiBold" HorizontalAlignment="Right" />
+                          <TextBlock Text="اربط كل قطعة بمخطط كاتلست مرفوع. تحفظ المقاسات والكميات كما أدخلها المستخدم؛ النظام لا يعيد تحسين توزيع القص تلقائياً." TextWrapping="Wrap" HorizontalAlignment="Right" Opacity="0.8" />
+                          <TextBlock Text="مخطط الكاتلست" HorizontalAlignment="Right" />
+                          <ComboBox x:Name="EngineeringCutListFileComboBox"><ComboBox.ItemTemplate><DataTemplate><TextBlock Text="{Binding Label}" /></DataTemplate></ComboBox.ItemTemplate></ComboBox>
+                          <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto,Auto" ColumnSpacing="12" RowSpacing="8">
+                            <TextBlock Grid.Row="0" Grid.Column="1" Text="اسم القطعة" HorizontalAlignment="Right" />
+                            <TextBox x:Name="EngineeringCutListPartNameTextBox" Grid.Row="0" Grid.Column="0" Watermark="مثال: جنب البوكس" />
+                            <TextBlock Grid.Row="1" Grid.Column="1" Text="الطول (مم)" HorizontalAlignment="Right" />
+                            <TextBox x:Name="EngineeringCutListPartLengthTextBox" Grid.Row="1" Grid.Column="0" Watermark="مثال: 868" />
+                            <TextBlock Grid.Row="2" Grid.Column="1" Text="العرض (مم)" HorizontalAlignment="Right" />
+                            <TextBox x:Name="EngineeringCutListPartWidthTextBox" Grid.Row="2" Grid.Column="0" Watermark="مثال: 382" />
+                          </Grid>
+                          <Grid ColumnDefinitions="*,*" ColumnSpacing="12">
+                            <StackPanel Grid.Column="1" Spacing="4">
+                              <TextBlock Text="سمك القطعة (مم، اختياري)" HorizontalAlignment="Right" />
+                              <TextBox x:Name="EngineeringCutListPartThicknessTextBox" Watermark="يُترك فارغاً لاستخدام سمك اللوح" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="0" Spacing="4">
+                              <TextBlock Text="عدد القطع" HorizontalAlignment="Right" />
+                              <TextBox x:Name="EngineeringCutListPartQuantityTextBox" Watermark="مثال: 2" />
+                            </StackPanel>
+                          </Grid>
+                          <TextBlock Text="ملاحظات القطعة (اختياري)" HorizontalAlignment="Right" />
+                          <TextBox x:Name="EngineeringCutListPartNotesTextBox" />
+                          <Button x:Name="AddEngineeringCutListPartButton" Click="AddEngineeringCutListPartAsync" Content="إضافة القطعة للكاتلست" HorizontalAlignment="Right" MinWidth="190" IsEnabled="False" />
+                          <TextBlock x:Name="EngineeringCutListPartsTextBlock" Text="لا توجد قطع مسجلة من الكاتلست بعد." TextWrapping="Wrap" />
+                        </StackPanel>
+                      </Border>
+                      <Button x:Name="FinalizeEngineeringPackageButton" Click="FinalizeEngineeringPackageAsync" Content="تثبيت النسخة الفنية" HorizontalAlignment="Right" MinWidth="180" />
+                      <TextBlock Text="بنود النسخة المحددة" FontWeight="SemiBold" FontSize="17" HorizontalAlignment="Right" />
+                      <TextBlock x:Name="EngineeringLinesTextBlock" Text="لا توجد بنود بعد." TextWrapping="Wrap" />
+                    </StackPanel>
+                  </TabItem>
+
+                  <TabItem Header="أمر شغل وتجهيز إنتاج (Job Order)">
+                    <StackPanel Margin="8" Spacing="10">
+                      <TextBlock Text="أمر شغل وتجهيز إنتاج — مطابق لنموذج المصنع" FontSize="21" FontWeight="SemiBold" HorizontalAlignment="Right" />
+                      <TextBlock Text="أنشئ أمر الإنتاج المرتبط بطلب العميل والنسخة الفنية المثبتة، ثم املأ بنود نموذج أمر الشغل واحفظه. يمكن تنزيل نسخة PDF من صفحتين بمقاس A3." HorizontalAlignment="Right" TextWrapping="Wrap" Opacity="0.85" />
+                      <Border Padding="12" CornerRadius="8" Background="{DynamicResource SystemControlBackgroundAltLowBrush}">
+                        <StackPanel Spacing="8">
+                          <TextBlock Text="إنشاء أمر شغل جديد" FontSize="18" FontWeight="SemiBold" HorizontalAlignment="Right" />
+                          <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto" ColumnSpacing="12" RowSpacing="8">
+                            <TextBlock Grid.Row="0" Grid.Column="1" Text="رقم أمر الإنتاج" HorizontalAlignment="Right" />
+                            <TextBox x:Name="ProductionOrderNumberTextBox" Grid.Row="0" Grid.Column="0" Watermark="مثال: JO-2026-001" />
+                            <TextBlock Grid.Row="1" Grid.Column="1" Text="كود المنتج / المواصفة" HorizontalAlignment="Right" />
+                            <TextBox x:Name="ProductionProductCodeTextBox" Grid.Row="1" Grid.Column="0" Watermark="كود يميز مواصفة المنتج" />
+                            <TextBlock Grid.Row="2" Grid.Column="1" Text="اسم المنتج" HorizontalAlignment="Right" />
+                            <TextBox x:Name="ProductionProductNameTextBox" Grid.Row="2" Grid.Column="0" Watermark="مثال: دولاب جرار" />
+                            <TextBlock Grid.Row="3" Grid.Column="1" Text="تاريخ أمر الشغل (YYYY-MM-DD)" HorizontalAlignment="Right" />
+                            <TextBox x:Name="ProductionDateTextBox" Grid.Row="3" Grid.Column="0" Watermark="YYYY-MM-DD" />
+                            <TextBlock Grid.Row="4" Grid.Column="1" Text="الكمية المطلوبة" HorizontalAlignment="Right" />
+                            <TextBox x:Name="ProductionPlannedQuantityTextBox" Grid.Row="4" Grid.Column="0" Watermark="مثال: 5" />
+                          </Grid>
+                          <Button x:Name="CreateProductionOrderButton" Click="CreateDraftProductionOrderAsync" Content="إنشاء أمر الشغل" HorizontalAlignment="Right" MinWidth="190" />
+                        </StackPanel>
+                      </Border>
+                      <Separator />
+                      <TextBlock Text="اختر أمر الشغل لتعبئة النموذج أو تنزيل PDF" FontSize="18" FontWeight="SemiBold" HorizontalAlignment="Right" />
+                      <ComboBox x:Name="ProductionOrderComboBox" SelectionChanged="ProductionOrderChanged">
+                        <ComboBox.ItemTemplate><DataTemplate><TextBlock Text="{Binding Label}" /></DataTemplate></ComboBox.ItemTemplate>
+                      </ComboBox>
+                      <TextBlock x:Name="ProductionWorkOrderSummaryTextBlock" TextWrapping="Wrap" HorizontalAlignment="Right" />
+                      <Border Padding="6" CornerRadius="5" Background="#243F85">
+                        <Grid ColumnDefinitions="95,105,4*,2*,38" ColumnSpacing="6">
+                          <TextBlock Grid.Column="0" Text="العدد / الكمية" Foreground="White" FontWeight="SemiBold" HorizontalAlignment="Center" />
+                          <TextBlock Grid.Column="1" Text="الوحدة" Foreground="White" FontWeight="SemiBold" HorizontalAlignment="Center" />
+                          <TextBlock Grid.Column="2" Text="المواصفات / المقاس / البيان" Foreground="White" FontWeight="SemiBold" HorizontalAlignment="Right" />
+                          <TextBlock Grid.Column="3" Text="اسم البند / الخامة" Foreground="White" FontWeight="SemiBold" HorizontalAlignment="Right" />
+                          <TextBlock Grid.Column="4" Text="اختيار" Foreground="White" FontWeight="SemiBold" HorizontalAlignment="Center" />
+                        </Grid>
+                      </Border>
+                      <StackPanel x:Name="ProductionWorkOrderLinesPanel" Spacing="2" />
+                      <TextBlock Text="صفّا الإضافات الأخرى مطابقان للنموذج المطبوع. اكتب اسم البند ومواصفاته ووحدته وكميته عند الحاجة." HorizontalAlignment="Right" TextWrapping="Wrap" Opacity="0.8" />
+                      <Grid ColumnDefinitions="Auto,Auto,*" ColumnSpacing="8">
+                        <Button x:Name="SaveProductionWorkOrderButton" Grid.Column="0" Click="SaveProductionWorkOrderAsync" Content="حفظ أمر الشغل" MinWidth="150" />
+                        <Button x:Name="DownloadProductionWorkOrderPdfButton" Grid.Column="1" Click="DownloadProductionWorkOrderPdfAsync" Content="تحميل أمر الشغل PDF" MinWidth="190" />
+                        <TextBlock x:Name="ProductionWorkOrderMessageTextBlock" Grid.Column="2" TextWrapping="Wrap" VerticalAlignment="Center" HorizontalAlignment="Right" />
+                      </Grid>
+                      <Separator />
+                      <TextBlock Text="أوامر الإنتاج المسجلة" FontSize="17" FontWeight="SemiBold" HorizontalAlignment="Right" />
+                      <TextBlock x:Name="ProductionOrdersTextBlock" Text="لا توجد أوامر إنتاج بعد." TextWrapping="Wrap" />
+                    </StackPanel>
+                  </TabItem>
+                </TabControl>
               </StackPanel>
             </ScrollViewer>
           </Grid>
