@@ -16,8 +16,16 @@ obj/
 *.db
 *.db-shm
 *.db-wal
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
 .DS_Store
 Thumbs.db
 
 # Local engineering-package file uploads
 apps/api/storage/
+
+# Local database backups and private review archive
+/*.dump
+/before-inventory-backup.sql
+/erp-auth-review.zip

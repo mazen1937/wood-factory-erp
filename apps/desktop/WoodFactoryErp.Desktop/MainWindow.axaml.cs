@@ -46,6 +46,13 @@ public partial class MainWindow : Window
     private Button CreateOrderButton = null!;
     private TextBlock OrdersListTextBlock = null!;
     private TextBox EngineeringReferenceTextBox = null!;
+    private TextBox EngineeringProductDescriptionTextBox = null!;
+    private CheckBox EngineeringUpholsteryRequiredCheckBox = null!;
+    private Border EngineeringCutListMetadataPanel = null!;
+    private ComboBox EngineeringBoardItemComboBox = null!;
+    private ComboBox EngineeringProductMaterialItemComboBox = null!;
+    private ComboBox EngineeringProductMaterialLineComboBox = null!;
+    private Button DeleteEngineeringProductMaterialLineButton = null!;
     private TextBox EngineeringNotesTextBox = null!;
     private Button CreateEngineeringPackageButton = null!;
     private ComboBox EngineeringPackageComboBox = null!;
@@ -68,6 +75,7 @@ public partial class MainWindow : Window
     private TextBox EngineeringMaterialCodeTextBox = null!;
     private TextBox EngineeringMaterialColorTextBox = null!;
     private TextBox EngineeringBoardThicknessTextBox = null!;
+    private TextBox EngineeringWastePercentageTextBox = null!;
     private TextBox EngineeringBoardLengthTextBox = null!;
     private TextBox EngineeringBoardWidthTextBox = null!;
     private TextBox EngineeringBoardQuantityTextBox = null!;
@@ -148,12 +156,15 @@ public partial class MainWindow : Window
 
     private MasterDataResponse? currentMasterData;
 
-    public MainWindow()
+    public MainWindow() : this(true) { }
+
+    internal MainWindow(bool restoreSession)
     {
         AvaloniaXamlLoader.Load(this);
         FindControls();
         InitializeChoices();
-        _ = RestoreSessionAsync();
+        InitializeOrderWorkspace();
+        if (restoreSession) _ = RestoreSessionAsync();
     }
 
     private void FindControls()
@@ -185,6 +196,13 @@ public partial class MainWindow : Window
         CreateOrderButton = this.FindControl<Button>("CreateOrderButton")!;
         OrdersListTextBlock = this.FindControl<TextBlock>("OrdersListTextBlock")!;
         EngineeringReferenceTextBox = this.FindControl<TextBox>("EngineeringReferenceTextBox")!;
+        EngineeringProductDescriptionTextBox = this.FindControl<TextBox>("EngineeringProductDescriptionTextBox")!;
+        EngineeringUpholsteryRequiredCheckBox = this.FindControl<CheckBox>("EngineeringUpholsteryRequiredCheckBox")!;
+        EngineeringCutListMetadataPanel = this.FindControl<Border>("EngineeringCutListMetadataPanel")!;
+        EngineeringBoardItemComboBox = this.FindControl<ComboBox>("EngineeringBoardItemComboBox")!;
+        EngineeringProductMaterialItemComboBox = this.FindControl<ComboBox>("EngineeringProductMaterialItemComboBox")!;
+        EngineeringProductMaterialLineComboBox = this.FindControl<ComboBox>("EngineeringProductMaterialLineComboBox")!;
+        DeleteEngineeringProductMaterialLineButton = this.FindControl<Button>("DeleteEngineeringProductMaterialLineButton")!;
         EngineeringNotesTextBox = this.FindControl<TextBox>("EngineeringNotesTextBox")!;
         CreateEngineeringPackageButton = this.FindControl<Button>("CreateEngineeringPackageButton")!;
         EngineeringPackageComboBox = this.FindControl<ComboBox>("EngineeringPackageComboBox")!;
@@ -207,6 +225,7 @@ public partial class MainWindow : Window
         EngineeringMaterialCodeTextBox = this.FindControl<TextBox>("EngineeringMaterialCodeTextBox")!;
         EngineeringMaterialColorTextBox = this.FindControl<TextBox>("EngineeringMaterialColorTextBox")!;
         EngineeringBoardThicknessTextBox = this.FindControl<TextBox>("EngineeringBoardThicknessTextBox")!;
+        EngineeringWastePercentageTextBox = this.FindControl<TextBox>("EngineeringWastePercentageTextBox")!;
         EngineeringBoardLengthTextBox = this.FindControl<TextBox>("EngineeringBoardLengthTextBox")!;
         EngineeringBoardWidthTextBox = this.FindControl<TextBox>("EngineeringBoardWidthTextBox")!;
         EngineeringBoardQuantityTextBox = this.FindControl<TextBox>("EngineeringBoardQuantityTextBox")!;
@@ -313,8 +332,9 @@ public partial class MainWindow : Window
 
         EngineeringLineTypeComboBox.ItemsSource = new[]
         {
-            new Choice("bom", "قائمة خامات (BOM)"),
-            new Choice("cut_list", "قائمة قص"),
+            new Choice("accessory", "إكسسوار"),
+            new Choice("raw_material", "خامة"),
+            new Choice("paint", "أدهان"),
         };
         EngineeringLineTypeComboBox.SelectedIndex = 0;
 
@@ -322,11 +342,12 @@ public partial class MainWindow : Window
         {
             new Choice("product_reference", "صورة المنتج المرجعية"),
             new Choice("dimensioned_drawing", "الرسم الهندسي بالأبعاد"),
-            new Choice("cut_list", "مخطط الكاتلست (ألواح / لون / سمك)"),
+            new Choice("cut_list", "كاتلست لون"),
             new Choice("bom_export", "تصدير قائمة المواد (BOM)"),
             new Choice("other", "مرفق آخر"),
         };
         EngineeringAttachmentTypeComboBox.SelectedIndex = 0;
+        EngineeringCutListMetadataPanel.IsVisible = false;
     }
 
     private async void SignInAsync(object? sender, RoutedEventArgs e)
@@ -421,6 +442,12 @@ public partial class MainWindow : Window
 
     private void SignOut(object? sender, RoutedEventArgs e)
     {
+        HideFinance();
+        financeTimer?.Stop();
+        ClearFinanceSession();
+        HideProductionExecution();
+        executionTimer?.Stop();
+        ++executionDetailVersion;
         accessToken = null;
         SessionStore.Delete();
         WelcomePanel.IsVisible = false;
@@ -434,6 +461,8 @@ public partial class MainWindow : Window
 
     private void ShowHome(object? sender, RoutedEventArgs e)
     {
+        HideFinance();
+        HideProductionExecution();
         MasterDataPanel.IsVisible = false;
         InventoryPanel.IsVisible = false;
         OrdersPanel.IsVisible = false;
@@ -442,6 +471,8 @@ public partial class MainWindow : Window
 
     private async void ShowMasterDataAsync(object? sender, RoutedEventArgs e)
     {
+        HideFinance();
+        HideProductionExecution();
         HomePanel.IsVisible = false;
         InventoryPanel.IsVisible = false;
         OrdersPanel.IsVisible = false;
@@ -451,6 +482,8 @@ public partial class MainWindow : Window
 
     private async void ShowInventoryAsync(object? sender, RoutedEventArgs e)
     {
+        HideFinance();
+        HideProductionExecution();
         HomePanel.IsVisible = false;
         MasterDataPanel.IsVisible = false;
         OrdersPanel.IsVisible = false;
@@ -479,6 +512,8 @@ public partial class MainWindow : Window
 
             currentMasterData = await response.Content.ReadFromJsonAsync<MasterDataResponse>(JsonOptions)
                 ?? throw new InvalidOperationException("استجابة البيانات الأساسية فارغة.");
+            RefreshEngineeringProductMaterialItemChoices();
+            RefreshOrderAccessoryChoices();
 
             UnitsTextBlock.Text = Describe(currentMasterData.Units, x => $"{x.Code}  —  {x.NameAr} ({x.NameEn}) | الدقة: {x.PrecisionDigits}");
             WarehousesTextBlock.Text = Describe(currentMasterData.Warehouses, x => $"{x.Code}  —  {x.NameAr} ({WarehouseTypeLabel(x.WarehouseType)})");
@@ -541,7 +576,7 @@ public partial class MainWindow : Window
             await EnsureApiSuccessAsync(movementsResponse);
             var movements = await movementsResponse.Content.ReadFromJsonAsync<List<InventoryMovement>>(JsonOptions) ?? [];
             InventoryMovementsTextBlock.Text = movements.Count == 0 ? "لا توجد حركات بعد." : string.Join(Environment.NewLine, movements.Select(x =>
-                $"{x.MovementDate:yyyy-MM-dd} | {x.DocumentReference} | {x.ItemCode} | كمية: {x.Quantity:N4} | تكلفة الوحدة: {x.UnitCost:N4} | الإجمالي: {x.TotalCost:N4} ج.م | متوسط بعد الحركة: {x.AverageCostAfter:N4}"));
+                $"{x.MovementDate:yyyy-MM-dd} | {InventoryMovementLabel(x.MovementType)} | {x.DocumentReference} | {x.ItemCode} | كمية: {x.Quantity:N4} | تكلفة الوحدة: {x.UnitCost:N4} | الإجمالي: {x.TotalCost:N4} ج.م | متوسط بعد الحركة: {x.AverageCostAfter:N4}"));
             InventoryMessageTextBlock.Text = "تم تحميل الأرصدة والحركات.";
         }
         catch (Exception ex) { InventoryMessageTextBlock.Text = FriendlyError(ex); }
@@ -590,6 +625,8 @@ public partial class MainWindow : Window
 
     private async void ShowOrdersAsync(object? sender, RoutedEventArgs e)
     {
+        HideFinance();
+        HideProductionExecution();
         HomePanel.IsVisible = false;
         MasterDataPanel.IsVisible = false;
         InventoryPanel.IsVisible = false;
@@ -609,7 +646,7 @@ public partial class MainWindow : Window
     private async void SelectedOrderChanged(object? sender, SelectionChangedEventArgs e)
     {
         if (!OrdersPanel.IsVisible || isLoadingOrders) return;
-        await LoadEngineeringPackagesAsync();
+        SyncWorkspaceOrderPickers(); HideWorkspaceDetails(); PrepareJobHeaderForSelectedOrder();
         await LoadProductionOrdersAsync();
     }
 
@@ -621,125 +658,26 @@ public partial class MainWindow : Window
 
     private async Task LoadOrdersAsync(string? selectOrderId = null)
     {
-        if (string.IsNullOrWhiteSpace(accessToken)) return;
-        var previousOrderId = selectOrderId ?? (SelectedOrderComboBox.SelectedItem as CustomerOrderChoice)?.Id;
-        isLoadingOrders = true;
-        RefreshOrdersButton.IsEnabled = false;
-        OrdersMessageTextBlock.Text = "جارٍ تحميل طلبات العملاء…";
-        try
-        {
-            using var request = new HttpRequestMessage(HttpMethod.Get, "orders");
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
-            using var response = await HttpClient.SendAsync(request);
-            await EnsureApiSuccessAsync(response);
-            currentOrders = await response.Content.ReadFromJsonAsync<List<CustomerOrderView>>(JsonOptions) ?? [];
-
-            var customerChoices = (currentMasterData?.Parties ?? [])
-                .Where(x => x.PartyType is "customer" or "both")
-                .Select(x => new Choice(x.Id, $"{x.Code} — {x.NameAr}"))
-                .ToList();
-            OrderCustomerComboBox.ItemsSource = customerChoices;
-            if (OrderCustomerComboBox.SelectedIndex < 0 && customerChoices.Count > 0)
-                OrderCustomerComboBox.SelectedIndex = 0;
-
-            SelectedOrderComboBox.ItemsSource = currentOrders.Select(x => new CustomerOrderChoice(
-                x.Id, $"{x.OrderNo} — {x.CustomerNameAr} ({x.OrderDate})")).ToList();
-            var desiredIndex = previousOrderId is null
-                ? -1
-                : currentOrders.FindIndex(x => x.Id == previousOrderId);
-            if (desiredIndex >= 0) SelectedOrderComboBox.SelectedIndex = desiredIndex;
-            else if (currentOrders.Count > 0) SelectedOrderComboBox.SelectedIndex = 0;
-            else SelectedOrderComboBox.SelectedIndex = -1;
-
-            OrdersListTextBlock.Text = currentOrders.Count == 0
-                ? "لا توجد طلبات بعد. أنشئ طلب العميل من النموذج أعلاه."
-                : string.Join(Environment.NewLine, currentOrders.Select(x =>
-                    $"{x.OrderNo} | العميل: {x.CustomerCode} — {x.CustomerNameAr} | تاريخ الطلب: {x.OrderDate}" +
-                    (string.IsNullOrWhiteSpace(x.RequestedDeliveryDate) ? "" : $" | التسليم المطلوب: {x.RequestedDeliveryDate}") +
-                    $" | الحالة: {x.Status} | النسخ الفنية: {x.RevisionCount} | أمر إنتاج: {x.ProductionOrderCount}" +
-                    (x.CurrentRevision is null ? " | لا توجد نسخة فنية مثبتة" : $" | النسخة الفنية المثبتة: R{x.CurrentRevision}")));
-
-            OrdersMessageTextBlock.Text = "تم تحميل الطلبات.";
-        }
-        catch (Exception ex)
-        {
-            OrdersMessageTextBlock.Text = $"تعذر تحميل الطلبات: {FriendlyError(ex)}";
-        }
-        finally
-        {
-            isLoadingOrders = false;
-            RefreshOrdersButton.IsEnabled = true;
-        }
-
-        await LoadEngineeringPackagesAsync();
-        await LoadProductionOrdersAsync();
+        if(string.IsNullOrWhiteSpace(accessToken))return;
+        var previous=selectOrderId??(SelectedOrderComboBox.SelectedItem as CustomerOrderChoice)?.Id;
+        isLoadingOrders=true;RefreshOrdersButton.IsEnabled=false;HideWorkspaceDetails();
+        try{
+            using var request=new HttpRequestMessage(HttpMethod.Get,"orders");request.Headers.Authorization=new("Bearer",accessToken);
+            using var response=await HttpClient.SendAsync(request);await EnsureApiSuccessAsync(response);
+            currentOrders=await response.Content.ReadFromJsonAsync<List<CustomerOrderView>>(JsonOptions)??[];
+            var customers=(currentMasterData?.Parties??[]).Where(p=>p.PartyType is "customer" or "both").Select(p=>new Choice(p.Id,p.Code+" — "+p.NameAr)).ToList();
+            var customer=pendingOrderCustomerId??(OrderCustomerComboBox.SelectedItem as Choice)?.Value;OrderCustomerComboBox.ItemsSource=customers;OrderCustomerComboBox.SelectedIndex=customers.FindIndex(c=>c.Value==customer);pendingOrderCustomerId=null;
+            if(OrderCustomerComboBox.SelectedIndex<0&&customers.Count>0)OrderCustomerComboBox.SelectedIndex=0;
+            var choices=currentOrders.Select(o=>new CustomerOrderChoice(o.Id,OrderLabel(o))).ToList();SelectedOrderComboBox.ItemsSource=choices;SelectedOrderComboBox.SelectedIndex=choices.FindIndex(c=>c.Id==previous);
+            SyncWorkspaceOrderPickers();OrdersListTextBlock.Text="";OrdersMessageTextBlock.Text="تم تحديث الطلبات. ابحث عن الطلب بكوده أو اسمه.";
+        }catch(Exception ex){OrdersMessageTextBlock.Text=FriendlyError(ex);}
+        finally{isLoadingOrders=false;RefreshOrdersButton.IsEnabled=true;}
+        PrepareJobHeaderForSelectedOrder();await LoadProductionOrdersAsync();
     }
 
     private async void CreateCustomerOrderAsync(object? sender, RoutedEventArgs e)
     {
-        if (string.IsNullOrWhiteSpace(accessToken))
-        {
-            OrdersMessageTextBlock.Text = "انتهت الجلسة. سجّل الدخول مرة أخرى.";
-            return;
-        }
-        if (OrderCustomerComboBox.SelectedItem is not Choice customer || string.IsNullOrWhiteSpace(customer.Value))
-        {
-            OrdersMessageTextBlock.Text = "اختر عميلاً أولاً. أضف العميل من البيانات الأساسية إذا لم يكن مسجلاً.";
-            return;
-        }
-        if (string.IsNullOrWhiteSpace(OrderNumberTextBox.Text))
-        {
-            OrdersMessageTextBlock.Text = "رقم الطلب مطلوب.";
-            return;
-        }
-        if (!DateOnly.TryParseExact(OrderDateTextBox.Text, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var orderDate))
-        {
-            OrdersMessageTextBlock.Text = "أدخل تاريخ الطلب بالصيغة YYYY-MM-DD.";
-            return;
-        }
-        string? deliveryDate = null;
-        if (!string.IsNullOrWhiteSpace(OrderDeliveryDateTextBox.Text))
-        {
-            if (!DateOnly.TryParseExact(OrderDeliveryDateTextBox.Text, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsedDeliveryDate))
-            {
-                OrdersMessageTextBlock.Text = "أدخل تاريخ التسليم بالصيغة YYYY-MM-DD أو اتركه فارغاً.";
-                return;
-            }
-            if (parsedDeliveryDate < orderDate)
-            {
-                OrdersMessageTextBlock.Text = "تاريخ التسليم المطلوب لا يمكن أن يسبق تاريخ الطلب.";
-                return;
-            }
-            deliveryDate = parsedDeliveryDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
-        }
-
-        CreateOrderButton.IsEnabled = false;
-        OrdersMessageTextBlock.Text = "جارٍ حفظ طلب العميل…";
-        try
-        {
-            using var request = new HttpRequestMessage(HttpMethod.Post, "orders")
-            {
-                Content = JsonContent.Create(new
-                {
-                    orderNo = OrderNumberTextBox.Text.Trim(),
-                    customerId = customer.Value,
-                    orderDate = orderDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
-                    requestedDeliveryDate = deliveryDate,
-                    notes = OrderNotesTextBox.Text?.Trim()
-                }, options: JsonOptions)
-            };
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
-            using var response = await HttpClient.SendAsync(request);
-            await EnsureApiSuccessAsync(response);
-            var created = await response.Content.ReadFromJsonAsync<CreatedOrder>(JsonOptions)
-                ?? throw new InvalidOperationException("استجابة حفظ الطلب فارغة.");
-            OrderNumberTextBox.Text = OrderDeliveryDateTextBox.Text = OrderNotesTextBox.Text = string.Empty;
-            OrderDateTextBox.Text = DateTime.Today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
-            await LoadOrdersAsync(created.Id);
-            OrdersMessageTextBlock.Text = $"تم حفظ طلب العميل {created.OrderNo}.";
-        }
-        catch (Exception ex) { OrdersMessageTextBlock.Text = FriendlyError(ex); }
-        finally { CreateOrderButton.IsEnabled = true; }
+        await ConfirmCompleteOrderAsync();
     }
 
     private async Task LoadEngineeringPackagesAsync(string? selectPackageId = null)
@@ -754,9 +692,7 @@ public partial class MainWindow : Window
                 EngineeringPackageComboBox.ItemsSource = currentPackages;
                 EngineeringPackageComboBox.SelectedIndex = -1;
                 EngineeringPackageFileComboBox.ItemsSource = Array.Empty<EngineeringFileChoice>();
-                EngineeringCutListFileComboBox.ItemsSource = Array.Empty<EngineeringFileChoice>();
-                EngineeringCutListPartsTextBlock.Text = "اختر نسخة فنية لعرض تفاصيل الكاتلست.";
-                AddEngineeringCutListPartButton.IsEnabled = false;
+                EngineeringLinesTextBlock.Text = "اختر نسخة فنية لعرض تفاصيل الكاتلست.";
                 EngineeringLinesTextBlock.Text = "اختر طلباً لعرض نسخه الفنية.";
                 EngineeringPackageSummaryTextBlock.Text = string.Empty;
                 AddEngineeringLineButton.IsEnabled = UploadEngineeringFileButton.IsEnabled = FinalizeEngineeringPackageButton.IsEnabled = DownloadEngineeringFileButton.IsEnabled = false;
@@ -771,7 +707,7 @@ public partial class MainWindow : Window
             currentPackages = await response.Content.ReadFromJsonAsync<List<EngineeringPackageView>>(JsonOptions) ?? [];
             var choices = currentPackages.Select(x => new EngineeringPackageChoice(
                 x.Id, x.Revision, x.Status,
-                $"R{x.Revision} — {EngineeringStatusLabel(x.Status)} — {x.TechnicalReference}")).ToList();
+                $"{x.ProductCode ?? "(قديم)"} — R{x.Revision} — {EngineeringStatusLabel(x.Status)} — {x.ProductDescription ?? x.TechnicalReference}")).ToList();
             EngineeringPackageComboBox.ItemsSource = choices;
             var desiredIndex = previousPackageId is null ? -1 : choices.FindIndex(x => x.Id == previousPackageId);
             if (desiredIndex >= 0) EngineeringPackageComboBox.SelectedIndex = desiredIndex;
@@ -790,8 +726,10 @@ public partial class MainWindow : Window
     {
         var order = SelectedOrderComboBox.SelectedItem as CustomerOrderChoice;
         if (order is null) { OrdersMessageTextBlock.Text = "اختر طلب العميل أولاً."; return; }
-        if (string.IsNullOrWhiteSpace(EngineeringReferenceTextBox.Text))
-        { OrdersMessageTextBlock.Text = "مرجع الرسم أو الملف الفني مطلوب."; return; }
+        var productCode = EngineeringReferenceTextBox.Text?.Trim();
+        var productDescription = EngineeringProductDescriptionTextBox.Text?.Trim();
+        if (string.IsNullOrWhiteSpace(productCode) || string.IsNullOrWhiteSpace(productDescription))
+        { OrdersMessageTextBlock.Text = "كود المنتج ووصفه مطلوبان."; return; }
         CreateEngineeringPackageButton.IsEnabled = false;
         try
         {
@@ -799,7 +737,9 @@ public partial class MainWindow : Window
             {
                 Content = JsonContent.Create(new
                 {
-                    technicalReference = EngineeringReferenceTextBox.Text.Trim(),
+                    productCode,
+                    productDescription,
+                    upholsteryRequired = EngineeringUpholsteryRequiredCheckBox.IsChecked == true,
                     notes = EngineeringNotesTextBox.Text?.Trim()
                 }, options: JsonOptions)
             };
@@ -808,9 +748,10 @@ public partial class MainWindow : Window
             await EnsureApiSuccessAsync(response);
             var created = await response.Content.ReadFromJsonAsync<EngineeringPackageView>(JsonOptions)
                 ?? throw new InvalidOperationException("استجابة إنشاء النسخة الفنية فارغة.");
-            EngineeringReferenceTextBox.Text = EngineeringNotesTextBox.Text = string.Empty;
+            EngineeringReferenceTextBox.Text = EngineeringProductDescriptionTextBox.Text = EngineeringNotesTextBox.Text = string.Empty;
+            EngineeringUpholsteryRequiredCheckBox.IsChecked = false;
             await LoadEngineeringPackagesAsync(created.Id);
-            OrdersMessageTextBlock.Text = $"تم إنشاء النسخة الفنية R{created.Revision} كمسودة. أضف البنود والمرفقات ثم ثبّتها.";
+            OrdersMessageTextBlock.Text = $"تم إنشاء النسخة الفنية R{created.Revision} للمنتج {created.ProductCode} كمسودة. ارفع الصورة المرجعية ثم كاتلستات الألوان ومكونات المنتج.";
         }
         catch (Exception ex) { OrdersMessageTextBlock.Text = FriendlyError(ex); }
         finally { CreateEngineeringPackageButton.IsEnabled = true; }
@@ -820,42 +761,132 @@ public partial class MainWindow : Window
     {
         if (EngineeringPackageComboBox.SelectedItem is not EngineeringPackageChoice package)
         { OrdersMessageTextBlock.Text = "اختر نسخة فنية أولاً."; return; }
-        if (package.Status != "draft") { OrdersMessageTextBlock.Text = "النسخة مثبتة؛ أنشئ نسخة جديدة لإضافة بنود."; return; }
-        if (EngineeringLineTypeComboBox.SelectedItem is not Choice lineType || string.IsNullOrWhiteSpace(EngineeringLineDescriptionTextBox.Text))
-        { OrdersMessageTextBlock.Text = "اختر نوع البند وأدخل وصفه."; return; }
+        if (package.Status != "draft") { OrdersMessageTextBlock.Text = "النسخة مثبتة؛ أنشئ نسخة جديدة لإضافة مكونات."; return; }
+        if (EngineeringLineTypeComboBox.SelectedItem is not Choice lineType ||
+            EngineeringProductMaterialItemComboBox.SelectedItem is not Choice itemChoice)
+        { OrdersMessageTextBlock.Text = "اختر نوع المكون والصنف من البيانات الأساسية."; return; }
         if (!decimal.TryParse(EngineeringLineQuantityTextBox.Text, NumberStyles.Number, CultureInfo.InvariantCulture, out var quantity) || quantity <= 0 || decimal.Round(quantity, 4) != quantity)
-        { OrdersMessageTextBlock.Text = "الكمية يجب أن تكون أكبر من صفر وبحد أقصى 4 خانات عشرية."; return; }
-        if (string.IsNullOrWhiteSpace(EngineeringLineUnitTextBox.Text))
-        { OrdersMessageTextBlock.Text = "وحدة القياس مطلوبة."; return; }
+        { OrdersMessageTextBlock.Text = "الكمية لكل وحدة يجب أن تكون أكبر من صفر وبحد أقصى 4 خانات عشرية."; return; }
 
         AddEngineeringLineButton.IsEnabled = false;
         try
         {
-            using var request = new HttpRequestMessage(HttpMethod.Post, $"orders/engineering-packages/{package.Id}/lines")
+            using var request = new HttpRequestMessage(HttpMethod.Post, $"orders/engineering-packages/{package.Id}/product-material-lines")
             {
                 Content = JsonContent.Create(new
                 {
                     lineType = lineType.Value,
-                    description = EngineeringLineDescriptionTextBox.Text.Trim(),
-                    materialReference = EngineeringLineMaterialReferenceTextBox.Text?.Trim(),
-                    quantity,
-                    unitCode = EngineeringLineUnitTextBox.Text.Trim(),
-                    dimensions = EngineeringLineDimensionsTextBox.Text?.Trim(),
+                    itemId = itemChoice.Value,
+                    quantityPerUnit = quantity,
                     notes = EngineeringLineNotesTextBox.Text?.Trim()
                 }, options: JsonOptions)
             };
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
             using var response = await HttpClient.SendAsync(request);
             await EnsureApiSuccessAsync(response);
-            EngineeringLineDescriptionTextBox.Text = EngineeringLineMaterialReferenceTextBox.Text = string.Empty;
-            EngineeringLineQuantityTextBox.Text = EngineeringLineUnitTextBox.Text = string.Empty;
-            EngineeringLineDimensionsTextBox.Text = EngineeringLineNotesTextBox.Text = string.Empty;
-            await LoadEngineeringPackagesAsync(package.Id);
-            OrdersMessageTextBlock.Text = "تم إضافة البند إلى النسخة الفنية.";
+            EngineeringLineQuantityTextBox.Text = EngineeringLineNotesTextBox.Text = string.Empty;
+            await LoadEngineeringProductMaterialLinesAsync(package.Id);
+            OrdersMessageTextBlock.Text = "تم إضافة المكون إلى وصفة المنتج.";
         }
         catch (Exception ex) { OrdersMessageTextBlock.Text = FriendlyError(ex); }
-        finally { AddEngineeringLineButton.IsEnabled = true; }
+        finally { AddEngineeringLineButton.IsEnabled = package.Status == "draft"; }
     }
+
+    private async void DeleteEngineeringProductMaterialLineAsync(object? sender, RoutedEventArgs e)
+    {
+        if (EngineeringPackageComboBox.SelectedItem is not EngineeringPackageChoice package ||
+            EngineeringProductMaterialLineComboBox.SelectedItem is not EngineeringProductMaterialLineChoice line)
+        { OrdersMessageTextBlock.Text = "اختر مكوناً مسجلاً لحذفه."; return; }
+        if (package.Status != "draft") { OrdersMessageTextBlock.Text = "لا يمكن تعديل نسخة مثبتة. أنشئ نسخة جديدة."; return; }
+        DeleteEngineeringProductMaterialLineButton.IsEnabled = false;
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Delete,
+                $"orders/engineering-packages/{package.Id}/product-material-lines/{line.Id}");
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+            using var response = await HttpClient.SendAsync(request);
+            await EnsureApiSuccessAsync(response);
+            await LoadEngineeringProductMaterialLinesAsync(package.Id);
+            OrdersMessageTextBlock.Text = "تم حذف المكون من المسودة.";
+        }
+        catch (Exception ex) { OrdersMessageTextBlock.Text = FriendlyError(ex); }
+        finally { DeleteEngineeringProductMaterialLineButton.IsEnabled = package.Status == "draft"; }
+    }
+
+    private void EngineeringProductMaterialTypeChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        RefreshEngineeringProductMaterialItemChoices();
+    }
+
+    private void EngineeringAttachmentTypeChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        var selected = EngineeringAttachmentTypeComboBox.SelectedItem as Choice;
+        EngineeringCutListMetadataPanel.IsVisible = selected?.Value == "cut_list";
+    }
+
+    private void RefreshEngineeringProductMaterialItemChoices()
+    {
+        var lineType = (EngineeringLineTypeComboBox.SelectedItem as Choice)?.Value;
+        var items = currentMasterData?.Items ?? [];
+        var eligible = lineType switch
+        {
+            "accessory" => items.Where(x => x.ItemType == "accessory"),
+            "raw_material" => items.Where(x => x.ItemType == "raw_material"),
+            "paint" => items.Where(x => x.ItemType is "consumable" or "raw_material"),
+            _ => Enumerable.Empty<MasterDataItem>()
+        };
+        var choices = eligible.OrderBy(x => x.Code)
+            .Select(x => new Choice(x.Id, $"{x.Code} — {x.NameAr}"))
+            .ToList();
+        var oldId = (EngineeringProductMaterialItemComboBox.SelectedItem as Choice)?.Value;
+        EngineeringProductMaterialItemComboBox.ItemsSource = choices;
+        var index = oldId is null ? -1 : choices.FindIndex(x => x.Value == oldId);
+        if (index >= 0) EngineeringProductMaterialItemComboBox.SelectedIndex = index;
+        else EngineeringProductMaterialItemComboBox.SelectedIndex = choices.Count > 0 ? 0 : -1;
+
+        var boards = items.Where(x => x.ItemType == "raw_material" && x.StockTracked && x.Classification == "materials")
+            .OrderBy(x => x.Code)
+            .Select(x => new Choice(x.Id, $"{x.Code} — {x.NameAr}"))
+            .ToList();
+        var oldBoardId = (EngineeringBoardItemComboBox.SelectedItem as Choice)?.Value;
+        EngineeringBoardItemComboBox.ItemsSource = boards;
+        var boardIndex = oldBoardId is null ? -1 : boards.FindIndex(x => x.Value == oldBoardId);
+        if (boardIndex >= 0) EngineeringBoardItemComboBox.SelectedIndex = boardIndex;
+        else EngineeringBoardItemComboBox.SelectedIndex = boards.Count > 0 ? 0 : -1;
+    }
+
+    private async Task LoadEngineeringProductMaterialLinesAsync(string packageId)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get,
+            $"orders/engineering-packages/{packageId}/product-material-lines");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+        using var response = await HttpClient.SendAsync(request);
+        await EnsureApiSuccessAsync(response);
+        var lines = await response.Content.ReadFromJsonAsync<List<EngineeringProductMaterialLineView>>(JsonOptions) ?? [];
+        var choices = lines.Select(x => new EngineeringProductMaterialLineChoice(
+            x.Id, x.LineType, x.ItemId,
+            $"{x.LineNo}. [{ProductMaterialTypeLabel(x.LineType)}] {x.ItemCode} — {x.ItemNameAr} | {x.QuantityPerUnit} {x.UnitCode}" +
+            (string.IsNullOrWhiteSpace(x.Notes) ? string.Empty : $" | {x.Notes}"))).ToList();
+        var previousId = (EngineeringProductMaterialLineComboBox.SelectedItem as EngineeringProductMaterialLineChoice)?.Id;
+        EngineeringProductMaterialLineComboBox.ItemsSource = choices;
+        var desiredIndex = previousId is null ? -1 : choices.FindIndex(x => x.Id == previousId);
+        if (desiredIndex >= 0) EngineeringProductMaterialLineComboBox.SelectedIndex = desiredIndex;
+        else EngineeringProductMaterialLineComboBox.SelectedIndex = choices.Count > 0 ? 0 : -1;
+        EngineeringLinesTextBlock.Text = choices.Count == 0
+            ? "لا توجد مكونات مسجلة بعد. أضف الإكسسوارات والخامات والأدهان اللازمة لكل وحدة من المنتج."
+            : string.Join(Environment.NewLine, choices.Select(x => x.Label));
+        var isDraft = (EngineeringPackageComboBox.SelectedItem as EngineeringPackageChoice)?.Status == "draft";
+        DeleteEngineeringProductMaterialLineButton.IsEnabled = isDraft && choices.Count > 0;
+        AddEngineeringLineButton.IsEnabled = isDraft;
+    }
+
+    private static string ProductMaterialTypeLabel(string value) => value switch
+    {
+        "accessory" => "إكسسوار",
+        "raw_material" => "خامة",
+        "paint" => "أدهان",
+        _ => value,
+    };
 
     private async Task LoadEngineeringPackageDetailsAsync()
     {
@@ -864,9 +895,11 @@ public partial class MainWindow : Window
             EngineeringPackageSummaryTextBlock.Text = string.Empty;
             EngineeringLinesTextBlock.Text = "لا توجد نسخة فنية محددة.";
             EngineeringPackageFileComboBox.ItemsSource = Array.Empty<EngineeringFileChoice>();
-            EngineeringCutListFileComboBox.ItemsSource = Array.Empty<EngineeringFileChoice>();
-            EngineeringCutListPartsTextBlock.Text = "لا توجد نسخة فنية محددة.";
-            AddEngineeringCutListPartButton.IsEnabled = false;
+            EngineeringProductMaterialLineComboBox.ItemsSource = Array.Empty<EngineeringProductMaterialLineChoice>();
+            EngineeringProductMaterialLineComboBox.SelectedIndex = -1;
+            EngineeringLinesTextBlock.Text = "لا توجد مكونات مسجلة بعد.";
+            AddEngineeringLineButton.IsEnabled = DeleteEngineeringProductMaterialLineButton.IsEnabled = false;
+            EngineeringCutListMetadataPanel.IsVisible = false;
             AddEngineeringLineButton.IsEnabled = UploadEngineeringFileButton.IsEnabled = FinalizeEngineeringPackageButton.IsEnabled = DownloadEngineeringFileButton.IsEnabled = false;
             return;
         }
@@ -878,18 +911,9 @@ public partial class MainWindow : Window
             AddEngineeringLineButton.IsEnabled = UploadEngineeringFileButton.IsEnabled = FinalizeEngineeringPackageButton.IsEnabled = isDraft;
             EngineeringPackageSummaryTextBlock.Text = package is null
                 ? $"النسخة R{selectedPackage.Revision} — {EngineeringStatusLabel(selectedPackage.Status)}"
-                : $"النسخة R{package.Revision} — {EngineeringStatusLabel(package.Status)} | المرجع: {package.TechnicalReference} | البنود: {package.LineCount} | المرفقات: {package.FileCount}";
+                : $"المنتج: {package.ProductCode ?? "(قديم بلا كود)"} — {package.ProductDescription ?? package.TechnicalReference} | النسخة R{package.Revision} — {EngineeringStatusLabel(package.Status)} | تنجيد: {(package.UpholsteryRequired == true ? "نعم" : package.UpholsteryRequired == false ? "لا" : "غير محدد في النسخة القديمة")} | المرفقات: {package.FileCount}";
 
-            using var linesRequest = new HttpRequestMessage(HttpMethod.Get, $"orders/engineering-packages/{selectedPackage.Id}/lines");
-            linesRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
-            using var linesResponse = await HttpClient.SendAsync(linesRequest);
-            await EnsureApiSuccessAsync(linesResponse);
-            var lines = await linesResponse.Content.ReadFromJsonAsync<List<EngineeringLineView>>(JsonOptions) ?? [];
-            EngineeringLinesTextBlock.Text = lines.Count == 0 ? "لا توجد بنود بعد." : string.Join(Environment.NewLine, lines.Select(x =>
-                $"{x.LineNo}. [{(x.LineType == "bom" ? "BOM" : "قائمة قص")}] {x.Description} | {x.Quantity} {x.UnitCode}" +
-                (string.IsNullOrWhiteSpace(x.MaterialReference) ? "" : $" | مرجع: {x.MaterialReference}") +
-                (string.IsNullOrWhiteSpace(x.Dimensions) ? "" : $" | أبعاد: {x.Dimensions}") +
-                (string.IsNullOrWhiteSpace(x.Notes) ? "" : $" | {x.Notes}")));
+            await LoadEngineeringProductMaterialLinesAsync(selectedPackage.Id);
 
             using var filesRequest = new HttpRequestMessage(HttpMethod.Get, $"orders/engineering-packages/{selectedPackage.Id}/files");
             filesRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
@@ -897,26 +921,18 @@ public partial class MainWindow : Window
             await EnsureApiSuccessAsync(filesResponse);
             var files = await filesResponse.Content.ReadFromJsonAsync<List<EngineeringFileView>>(JsonOptions) ?? [];
             var fileChoices = files.Select(x => new EngineeringFileChoice(
-                x.Id, x.FileName, x.AttachmentType, x.MaterialCode, x.MaterialColor, x.ThicknessMm,
-                x.BoardLengthMm, x.BoardWidthMm, x.BoardQuantity,
+                x.Id, x.FileName, x.AttachmentType, x.MaterialCode, x.MaterialItemId, x.MaterialColor,
+                x.ThicknessMm, x.BoardLengthMm, x.BoardWidthMm, x.BoardQuantity, x.WastePercentage,
                 $"{AttachmentTypeLabel(x.AttachmentType)} — {x.FileName}" +
-                (x.AttachmentType == "cut_list" ? $" | {x.MaterialCode} | {x.MaterialColor} | {x.ThicknessMm} مم | {x.BoardLengthMm}×{x.BoardWidthMm} مم | ألواح: {x.BoardQuantity}" : "") +
+                (x.AttachmentType == "cut_list" ? $" | {x.MaterialCode} | اللون: {x.MaterialColor} | الألواح: {x.BoardQuantity} | الهالك: {(x.WastePercentage is null ? "غير محدد" : x.WastePercentage + "%")}" : "") +
                 (string.IsNullOrWhiteSpace(x.Description) ? "" : $" | {x.Description}") + $" ({FormatFileSize(x.SizeBytes)})")).ToList();
             var previousFileId = (EngineeringPackageFileComboBox.SelectedItem as EngineeringFileChoice)?.Id;
             EngineeringPackageFileComboBox.ItemsSource = fileChoices;
             var fileIndex = previousFileId is null ? -1 : fileChoices.FindIndex(x => x.Id == previousFileId);
             if (fileIndex >= 0) EngineeringPackageFileComboBox.SelectedIndex = fileIndex;
             else if (fileChoices.Count > 0) EngineeringPackageFileComboBox.SelectedIndex = 0;
-
-            var cutListChoices = fileChoices.Where(x => x.AttachmentType == "cut_list").ToList();
-            var previousCutFileId = (EngineeringCutListFileComboBox.SelectedItem as EngineeringFileChoice)?.Id;
-            EngineeringCutListFileComboBox.ItemsSource = cutListChoices;
-            var cutIndex = previousCutFileId is null ? -1 : cutListChoices.FindIndex(x => x.Id == previousCutFileId);
-            if (cutIndex >= 0) EngineeringCutListFileComboBox.SelectedIndex = cutIndex;
-            else if (cutListChoices.Count > 0) EngineeringCutListFileComboBox.SelectedIndex = 0;
-            DownloadEngineeringFileButton.IsEnabled = EngineeringPackageFileComboBox.ItemCount > 0;
-            AddEngineeringCutListPartButton.IsEnabled = isDraft && cutListChoices.Count > 0;
-            await LoadEngineeringCutListPartsAsync(selectedPackage.Id);
+            DownloadEngineeringFileButton.IsEnabled = fileChoices.Count > 0;
+            FinalizeEngineeringPackageButton.IsEnabled = isDraft;
         }
         catch (Exception ex)
         {
@@ -1022,20 +1038,26 @@ public partial class MainWindow : Window
         if (EngineeringPackageComboBox.SelectedItem is not EngineeringPackageChoice package || package.Status != "draft")
         { OrdersMessageTextBlock.Text = "اختر نسخة فنية مسودة قبل رفع المرفقات."; return; }
         if (EngineeringAttachmentTypeComboBox.SelectedItem is not Choice attachmentType)
-        { OrdersMessageTextBlock.Text = "اختر نوع المرفق أولاً."; return; }
+        { OrdersMessageTextBlock.Text = "اختر نوع المستند أولاً."; return; }
+
+        decimal boardQuantity = 0;
+        decimal wastePercentage = 0;
+        Choice? boardItem = null;
         if (attachmentType.Value == "cut_list")
         {
-            bool Positive(string? text) => decimal.TryParse(text, NumberStyles.Number, CultureInfo.InvariantCulture, out var number) && number > 0;
-            if (string.IsNullOrWhiteSpace(EngineeringMaterialCodeTextBox.Text) || string.IsNullOrWhiteSpace(EngineeringMaterialColorTextBox.Text) ||
-                !Positive(EngineeringBoardThicknessTextBox.Text) || !Positive(EngineeringBoardLengthTextBox.Text) ||
-                !Positive(EngineeringBoardWidthTextBox.Text) || !Positive(EngineeringBoardQuantityTextBox.Text))
-            { OrdersMessageTextBlock.Text = "للكاتلست، أدخل نوع اللوح واللون والسمك وطول اللوح وعرضه وعدد الألواح بشكل صحيح."; return; }
+            boardItem = EngineeringBoardItemComboBox.SelectedItem as Choice;
+            if (boardItem is null || string.IsNullOrWhiteSpace(EngineeringMaterialColorTextBox.Text))
+            { OrdersMessageTextBlock.Text = "اختر خامة اللوح من البيانات الأساسية وأدخل اللون."; return; }
+            if (!decimal.TryParse(EngineeringBoardQuantityTextBox.Text, NumberStyles.Number, CultureInfo.InvariantCulture, out boardQuantity) || boardQuantity <= 0)
+            { OrdersMessageTextBlock.Text = "عدد الألواح يجب أن يكون أكبر من صفر."; return; }
+            if (!decimal.TryParse(EngineeringWastePercentageTextBox.Text, NumberStyles.Number, CultureInfo.InvariantCulture, out wastePercentage) || wastePercentage < 0 || wastePercentage > 100)
+            { OrdersMessageTextBlock.Text = "نسبة الهالك يجب أن تكون من 0 إلى 100. استخدم النقطة للفواصل العشرية."; return; }
         }
         var storage = TopLevel.GetTopLevel(this)?.StorageProvider;
         if (storage is null) { OrdersMessageTextBlock.Text = "اختيار الملفات غير متاح في هذه الجلسة."; return; }
         var picked = await storage.OpenFilePickerAsync(new FilePickerOpenOptions
         {
-            Title = "اختيار ملف فني",
+            Title = "اختيار مستند المنتج أو الكاتلست",
             AllowMultiple = false,
             FileTypeFilter = new List<FilePickerFileType>
             {
@@ -1059,18 +1081,20 @@ public partial class MainWindow : Window
             }
             AddMetadata("attachmentType", attachmentType.Value);
             AddMetadata("description", EngineeringAttachmentDescriptionTextBox.Text);
-            AddMetadata("materialCode", EngineeringMaterialCodeTextBox.Text);
-            AddMetadata("materialColor", EngineeringMaterialColorTextBox.Text);
-            AddMetadata("thicknessMm", EngineeringBoardThicknessTextBox.Text);
-            AddMetadata("boardLengthMm", EngineeringBoardLengthTextBox.Text);
-            AddMetadata("boardWidthMm", EngineeringBoardWidthTextBox.Text);
-            AddMetadata("boardQuantity", EngineeringBoardQuantityTextBox.Text);
+            if (attachmentType.Value == "cut_list")
+            {
+                AddMetadata("materialItemId", boardItem!.Value);
+                AddMetadata("materialColor", EngineeringMaterialColorTextBox.Text);
+                AddMetadata("boardQuantity", boardQuantity.ToString(CultureInfo.InvariantCulture));
+                AddMetadata("wastePercentage", wastePercentage.ToString(CultureInfo.InvariantCulture));
+            }
             using var request = new HttpRequestMessage(HttpMethod.Post, $"orders/engineering-packages/{package.Id}/files") { Content = multipart };
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
             using var response = await HttpClient.SendAsync(request);
             await EnsureApiSuccessAsync(response);
+            EngineeringAttachmentDescriptionTextBox.Text = string.Empty;
             await LoadEngineeringPackagesAsync(package.Id);
-            OrdersMessageTextBlock.Text = $"تم رفع المرفق: {file.Name}";
+            OrdersMessageTextBlock.Text = $"تم رفع المستند: {file.Name}";
         }
         catch (Exception ex) { OrdersMessageTextBlock.Text = FriendlyError(ex); }
         finally { UploadEngineeringFileButton.IsEnabled = true; }
@@ -1103,107 +1127,16 @@ public partial class MainWindow : Window
         catch (Exception ex) { OrdersMessageTextBlock.Text = FriendlyError(ex); }
     }
 
-    private async void CreateDraftProductionOrderAsync(object? sender, RoutedEventArgs e)
-    {
-        if (SelectedOrderComboBox.SelectedItem is not CustomerOrderChoice order)
-        { OrdersMessageTextBlock.Text = "اختر طلب العميل أولاً."; return; }
-        if (EngineeringPackageComboBox.SelectedItem is not EngineeringPackageChoice package || package.Status != "finalized")
-        { OrdersMessageTextBlock.Text = "اختر نسخة فنية مثبتة أولاً."; return; }
-        if (string.IsNullOrWhiteSpace(ProductionOrderNumberTextBox.Text) ||
-            string.IsNullOrWhiteSpace(ProductionProductCodeTextBox.Text) ||
-            string.IsNullOrWhiteSpace(ProductionProductNameTextBox.Text))
-        { OrdersMessageTextBlock.Text = "رقم أمر الشغل وكود المنتج واسم المنتج مطلوبة."; return; }
-        if (!DateOnly.TryParseExact(ProductionDateTextBox.Text, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var productionDate))
-        { OrdersMessageTextBlock.Text = "أدخل تاريخ أمر الشغل بالصيغة YYYY-MM-DD."; return; }
-        if (!decimal.TryParse(ProductionPlannedQuantityTextBox.Text, NumberStyles.Number, CultureInfo.InvariantCulture, out var plannedQuantity) || plannedQuantity <= 0 || decimal.Round(plannedQuantity, 4) != plannedQuantity)
-        { OrdersMessageTextBlock.Text = "الكمية المطلوبة يجب أن تكون أكبر من صفر وبحد أقصى 4 خانات عشرية."; return; }
-
-        CreateProductionOrderButton.IsEnabled = false;
-        try
-        {
-            using var request = new HttpRequestMessage(HttpMethod.Post, $"orders/{order.Id}/production-orders")
-            {
-                Content = JsonContent.Create(new
-                {
-                    orderNo = ProductionOrderNumberTextBox.Text.Trim(),
-                    engineeringPackageId = package.Id,
-                    productCode = ProductionProductCodeTextBox.Text.Trim(),
-                    productName = ProductionProductNameTextBox.Text.Trim(),
-                    productionDate = productionDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
-                    plannedQuantity
-                }, options: JsonOptions)
-            };
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
-            using var response = await HttpClient.SendAsync(request);
-            await EnsureApiSuccessAsync(response);
-            var created = await response.Content.ReadFromJsonAsync<CreatedProductionOrder>(JsonOptions)
-                ?? throw new InvalidOperationException("استجابة إنشاء أمر الشغل فارغة.");
-            ProductionOrderNumberTextBox.Text = ProductionProductCodeTextBox.Text = ProductionPlannedQuantityTextBox.Text = string.Empty;
-            ProductionDateTextBox.Text = DateTime.Today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
-            await LoadProductionOrdersAsync(created.Id);
-            OrdersMessageTextBlock.Text = $"تم إنشاء أمر الشغل المسودة {created.OrderNo} وربطه بالنسخة الفنية R{package.Revision}. أكمل البنود ثم احفظ النموذج.";
-            ProductionWorkOrderMessageTextBlock.Text = "أدخل كميات ومواصفات البنود ثم اضغط حفظ أمر الشغل.";
-        }
-        catch (Exception ex) { OrdersMessageTextBlock.Text = FriendlyError(ex); }
-        finally { CreateProductionOrderButton.IsEnabled = true; }
-    }
+    private async void CreateDraftProductionOrderAsync(object? sender, RoutedEventArgs e) => await CreateLinkedJobCoreAsync();
 
     private async void ProductionOrderChanged(object? sender, SelectionChangedEventArgs e)
     {
-        if (!OrdersPanel.IsVisible || isLoadingProductionOrders || isLoadingProductionWorkOrder) return;
+        if (!OrdersPanel.IsVisible || isLoadingProductionOrders) return;
+        jobSearchPicker.Select((ProductionOrderComboBox.SelectedItem as ProductionOrderChoice)?.Id);
         await LoadProductionWorkOrderAsync();
     }
 
-    private async Task LoadProductionOrdersAsync(string? selectProductionOrderId = null)
-    {
-        if (string.IsNullOrWhiteSpace(accessToken)) return;
-        var previousId = selectProductionOrderId ?? (ProductionOrderComboBox.SelectedItem as ProductionOrderChoice)?.Id;
-        isLoadingProductionOrders = true;
-        try
-        {
-            using var request = new HttpRequestMessage(HttpMethod.Get, "orders/production-orders");
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
-            using var response = await HttpClient.SendAsync(request);
-            await EnsureApiSuccessAsync(response);
-            currentProductionOrders = await response.Content.ReadFromJsonAsync<List<ProductionOrderView>>(JsonOptions) ?? [];
-
-            ProductionOrdersTextBlock.Text = currentProductionOrders.Count == 0
-                ? "لا توجد أوامر إنتاج بعد. أنشئ أمر شغل من النموذج أعلاه."
-                : string.Join(Environment.NewLine, currentProductionOrders.Select(x =>
-                    $"{x.OrderNo} | طلب العميل: {x.CustomerOrderNo ?? "إنتاج للمخزون"} | المنتج: {x.ProductCode} — {x.ProductName} | الكمية: {x.PlannedQuantity} | التاريخ: {x.ProductionDate} | النسخة الفنية: {(x.EngineeringRevision is null ? "غير محددة" : $"R{x.EngineeringRevision}")} | الحالة: {x.Status}"));
-
-            var selectedCustomerOrderId = (SelectedOrderComboBox.SelectedItem as CustomerOrderChoice)?.Id;
-            var relevantOrders = selectedCustomerOrderId is null
-                ? currentProductionOrders
-                : currentProductionOrders.Where(x => x.CustomerOrderId == selectedCustomerOrderId).ToList();
-            ProductionOrderComboBox.ItemsSource = relevantOrders.Select(x => new ProductionOrderChoice(
-                x.Id, $"{x.OrderNo} — {x.ProductCode} — {x.ProductName} — {x.Status}")).ToList();
-            var desiredIndex = previousId is null ? -1 : relevantOrders.FindIndex(x => x.Id == previousId);
-            if (desiredIndex >= 0) ProductionOrderComboBox.SelectedIndex = desiredIndex;
-            else if (relevantOrders.Count > 0) ProductionOrderComboBox.SelectedIndex = 0;
-            else ProductionOrderComboBox.SelectedIndex = -1;
-        }
-        catch (Exception ex)
-        {
-            ProductionOrdersTextBlock.Text = $"تعذر تحميل أوامر الإنتاج: {FriendlyError(ex)}";
-            ProductionWorkOrderMessageTextBlock.Text = FriendlyError(ex);
-        }
-        finally { isLoadingProductionOrders = false; }
-
-        if (ProductionOrderComboBox.SelectedItem is ProductionOrderChoice)
-            await LoadProductionWorkOrderAsync();
-        else
-            ClearProductionWorkOrderEditor();
-    }
-
-    private async Task<ProductionWorkOrderResponse?> FetchProductionWorkOrderAsync(string productionOrderId)
-    {
-        using var request = new HttpRequestMessage(HttpMethod.Get, $"orders/production-orders/{productionOrderId}/work-order");
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
-        using var response = await HttpClient.SendAsync(request);
-        await EnsureApiSuccessAsync(response);
-        return await response.Content.ReadFromJsonAsync<ProductionWorkOrderResponse>(JsonOptions);
-    }
+    private async Task LoadProductionOrdersAsync(string? selectProductionOrderId=null) => await LoadLinkedJobOrdersAsync(selectProductionOrderId);
 
     private async Task LoadProductionWorkOrderAsync(string? productionOrderId = null)
     {
@@ -1215,17 +1148,19 @@ public partial class MainWindow : Window
             return;
         }
 
+        var loadVersion = ++productionWorkOrderLoadVersion;
         isLoadingProductionWorkOrder = true;
         try
         {
             var result = await FetchProductionWorkOrderAsync(id)
                 ?? throw new InvalidOperationException("استجابة أمر الشغل فارغة.");
+            if (loadVersion != productionWorkOrderLoadVersion) return;
+            ProductionProductCodeTextBox.Text = result.ProductionOrder.ProductCode;
+            ProductionPlannedQuantityTextBox.Text = result.ProductionOrder.PlannedQuantity;
             ProductionProductNameTextBox.Text = result.ProductionOrder.ProductName;
             ProductionDateTextBox.Text = result.ProductionOrder.ProductionDate;
             var po = result.ProductionOrder;
-            ProductionWorkOrderSummaryTextBlock.Text =
-                $"رقم الأمر: {po.OrderNo} | المنتج: {po.ProductCode} — {po.ProductName} | الكمية: {po.PlannedQuantity} | التاريخ: {po.ProductionDate} | " +
-                $"الطلب: {po.CustomerOrderNo ?? "إنتاج للمخزون"} | النسخة الفنية: {(po.EngineeringRevision is null ? "غير محددة" : $"R{po.EngineeringRevision}")} | الحالة: {ProductionStatusLabel(po.Status)}";
+            ProductionWorkOrderSummaryTextBlock.Text = BuildLinkedJobSummary(po);
             RenderProductionWorkOrderLines(result.Lines);
             SaveProductionWorkOrderButton.IsEnabled = po.Status == "draft";
             DownloadProductionWorkOrderPdfButton.IsEnabled = true;
@@ -1239,11 +1174,13 @@ public partial class MainWindow : Window
             SaveProductionWorkOrderButton.IsEnabled = false;
             DownloadProductionWorkOrderPdfButton.IsEnabled = false;
         }
-        finally { isLoadingProductionWorkOrder = false; }
+        finally { if (loadVersion == productionWorkOrderLoadVersion) isLoadingProductionWorkOrder = false; }
     }
 
     private void ClearProductionWorkOrderEditor()
     {
+        ++productionWorkOrderLoadVersion;
+        isLoadingProductionWorkOrder = false;
         if (ProductionWorkOrderLinesPanel is not null) ProductionWorkOrderLinesPanel.Children.Clear();
         currentWorkOrderLineEditors = [];
         if (ProductionWorkOrderSummaryTextBlock is not null) ProductionWorkOrderSummaryTextBlock.Text = "اختر أمر إنتاج مسودة لعرض نموذج أمر الشغل.";
@@ -1366,6 +1303,7 @@ public partial class MainWindow : Window
 
     private async Task<bool> SaveProductionWorkOrderCoreAsync()
     {
+        if (isLoadingProductionWorkOrder) return false;
         if (ProductionOrderComboBox.SelectedItem is not ProductionOrderChoice selected)
         {
             ProductionWorkOrderMessageTextBlock.Text = "اختر أمر شغل أولاً.";
@@ -1475,6 +1413,7 @@ public partial class MainWindow : Window
             });
             if (destination is null) return;
             await using var target = await destination.OpenWriteAsync();
+            target.SetLength(0);
             await target.WriteAsync(pdfBytes);
             ProductionWorkOrderMessageTextBlock.Text = $"تم إنشاء وحفظ ملف PDF: {destination.Name}";
         }
@@ -1497,9 +1436,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private static string BuildProductionWorkOrderSummary(ProductionWorkOrderDetails po) =>
-        $"رقم الأمر: {po.OrderNo} | المنتج: {po.ProductCode} — {po.ProductName} | الكمية: {po.PlannedQuantity} | التاريخ: {po.ProductionDate} | " +
-        $"الطلب: {po.CustomerOrderNo ?? "إنتاج للمخزون"} | النسخة الفنية: {(po.EngineeringRevision is null ? "غير محددة" : $"R{po.EngineeringRevision}")} | الحالة: {ProductionStatusLabel(po.Status)}";
+    private static string BuildProductionWorkOrderSummary(ProductionWorkOrderDetails po) => BuildLinkedJobSummary(po);
 
     private static string ProductionStatusLabel(string status) => status switch
     {
@@ -1646,9 +1583,23 @@ public partial class MainWindow : Window
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
             using var response = await HttpClient.SendAsync(request);
             await EnsureApiSuccessAsync(response);
+            string? createdCustomerId = null;
+            if (endpoint == "parties" && returnToOrderAfterCustomer)
+            {
+                using var created = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+                createdCustomerId = created.RootElement.GetProperty("id").GetString();
+            }
             clearForm();
             await LoadMasterDataAsync();
             MasterDataMessageTextBlock.Text = successMessage;
+            if (createdCustomerId is not null)
+            {
+                pendingOrderCustomerId = createdCustomerId;
+                returnToOrderAfterCustomer = false;
+                MasterDataPanel.IsVisible = false;
+                OrdersPanel.IsVisible = true;
+                await LoadOrdersAsync();
+            }
         }
         catch (Exception ex)
         {
@@ -1729,22 +1680,24 @@ public partial class MainWindow : Window
     private sealed record Choice(string Value, string Label);
     private sealed record CustomerOrderChoice(string Id, string Label);
     private sealed record EngineeringPackageChoice(string Id, int Revision, string Status, string Label);
-    private sealed record EngineeringFileChoice(string Id, string FileName, string AttachmentType, string? MaterialCode, string? MaterialColor, string? ThicknessMm, string? BoardLengthMm, string? BoardWidthMm, string? BoardQuantity, string Label);
+    private sealed record EngineeringFileChoice(string Id, string FileName, string AttachmentType, string? MaterialCode, string? MaterialItemId, string? MaterialColor, string? ThicknessMm, string? BoardLengthMm, string? BoardWidthMm, string? BoardQuantity, string? WastePercentage, string Label);
     private sealed record CreatedOrder(string Id, string OrderNo, string CustomerId, string OrderDate, string? RequestedDeliveryDate, string Status, string? Notes, DateTime CreatedAt);
-    private sealed record CustomerOrderView(string Id, string OrderNo, string CustomerId, string CustomerCode, string CustomerNameAr, string OrderDate, string? RequestedDeliveryDate, string Status, string? Notes, DateTime CreatedAt, string? CurrentPackageId, int? CurrentRevision, int RevisionCount, int ProductionOrderCount);
-    private sealed record EngineeringPackageView(string Id, string CustomerOrderId, int Revision, string TechnicalReference, string? Notes, string Status, DateTime CreatedAt, DateTime? FinalizedAt, int LineCount, int FileCount);
+    private sealed record CustomerOrderView(string Id, string OrderNo, string CustomerId, string CustomerCode, string CustomerNameAr, string OrderDate, string? RequestedDeliveryDate, string Status, string? Notes, DateTime CreatedAt, string? CurrentPackageId, int? CurrentRevision, int RevisionCount, int ProductionOrderCount, string? ProductCode, string? ProductName, string? OrderName = null);
+    private sealed record EngineeringPackageView(string Id, string CustomerOrderId, int Revision, string? ProductCode, string? ProductDescription, bool? UpholsteryRequired, string TechnicalReference, string? Notes, string Status, DateTime CreatedAt, DateTime? FinalizedAt, int LineCount, int ProductMaterialLineCount, int FileCount);
     private sealed record EngineeringLineView(string Id, string PackageId, int LineNo, string LineType, string Description, string? MaterialReference, string Quantity, string UnitCode, string? Dimensions, string? Notes, DateTime CreatedAt);
-    private sealed record EngineeringFileView(string Id, string PackageId, string FileName, string MimeType, string SizeBytes, string ChecksumSha256, string AttachmentType, string? Description, string? MaterialCode, string? MaterialColor, string? ThicknessMm, string? BoardLengthMm, string? BoardWidthMm, string? BoardQuantity, DateTime CreatedAt);
+    private sealed record EngineeringFileView(string Id, string PackageId, string FileName, string MimeType, string SizeBytes, string ChecksumSha256, string AttachmentType, string? Description, string? MaterialCode, string? MaterialItemId, string? MaterialColor, string? WastePercentage, string? ThicknessMm, string? BoardLengthMm, string? BoardWidthMm, string? BoardQuantity, DateTime CreatedAt);
+    private sealed record EngineeringProductMaterialLineView(string Id, string PackageId, int LineNo, string LineType, string ItemId, string ItemCode, string ItemNameAr, string UnitCode, string UnitNameAr, string QuantityPerUnit, string? Notes, DateTime CreatedAt);
+    private sealed record EngineeringProductMaterialLineChoice(string Id, string LineType, string ItemId, string Label);
     private sealed record EngineeringCutListPartView(string Id, string PackageId, string SourceFileId, int LineNo, string PartName, string LengthMm, string WidthMm, string? ThicknessMm, string Quantity, string? Notes, string FileName, string MaterialCode, string MaterialColor, string BoardThicknessMm, string BoardLengthMm, string BoardWidthMm, string BoardQuantity);
     private sealed record CreatedProductionOrder(string Id, string OrderNo, string ProductionMode, string CustomerOrderId, string EngineeringPackageId, string ProductCode, string ProductName, string ProductionDate, string PlannedQuantity, string Status, DateTime CreatedAt);
-    private sealed record ProductionOrderView(string Id, string OrderNo, string ProductionMode, string? CustomerOrderId, string? CustomerOrderNo, string? CustomerNameAr, string? EngineeringPackageId, int? EngineeringRevision, string ProductCode, string ProductName, string ProductionDate, string PlannedQuantity, string Status, DateTime CreatedAt);
+    private sealed record ProductionOrderView(string Id, string OrderNo, string ProductionMode, string? CustomerOrderId, string? CustomerOrderNo, string? CustomerNameAr, string? EngineeringPackageId, int? EngineeringRevision, string ProductCode, string ProductName, string ProductionDate, string PlannedQuantity, string Status, DateTime CreatedAt, string? JobName = null, string? PlannedEndDate = null);
     private sealed record ProductionOrderChoice(string Id, string Label);
     private sealed record ProductionWorkOrderResponse(ProductionWorkOrderDetails ProductionOrder, List<ProductionWorkOrderLineView> Lines);
-    private sealed record ProductionWorkOrderDetails(string Id, string OrderNo, string ProductionMode, string? CustomerOrderId, string? CustomerOrderNo, string? CustomerNameAr, string? EngineeringPackageId, int? EngineeringRevision, string? TechnicalReference, string ProductCode, string ProductName, string ProductionDate, string PlannedQuantity, string Status, DateTime CreatedAt);
+    private sealed record ProductionWorkOrderDetails(string Id, string OrderNo, string ProductionMode, string? CustomerOrderId, string? CustomerOrderNo, string? CustomerNameAr, string? EngineeringPackageId, int? EngineeringRevision, string? TechnicalReference, string ProductCode, string ProductName, string ProductionDate, string PlannedQuantity, string Status, DateTime CreatedAt, string? JobName = null, string? PlannedEndDate = null);
     private sealed record ProductionWorkOrderLineView(int LineNo, string? CatalogCode, string ItemNameAr, string Specification, string UnitCode, string? Quantity, bool IsSelected, bool IsCustom);
     private sealed record WorkOrderLinePayload(string? CatalogCode, string ItemNameAr, string Specification, string UnitCode, decimal? Quantity, bool IsSelected, bool IsCustom);
     private sealed record InventoryBalance(string ItemId, string ItemCode, string ItemNameAr, string UnitCode, string WarehouseId, string WarehouseCode, string WarehouseNameAr, decimal QuantityOnHand, decimal AverageUnitCost, decimal InventoryValue);
-    private sealed record InventoryMovement(string Id, string OperationId, string DocumentReference, DateTime MovementDate, string ItemId, string ItemCode, string ItemNameAr, string WarehouseId, string WarehouseCode, string? PartyId, string? SupplierCode, string? SupplierNameAr, decimal Quantity, decimal UnitCost, decimal TotalCost, decimal AverageCostAfter, decimal QuantityAfter, decimal ValueAfter, string? Notes, DateTime PostedAt);
+    private sealed record InventoryMovement(string Id, string OperationId, string DocumentReference, DateTime MovementDate, string ItemId, string ItemCode, string ItemNameAr, string WarehouseId, string WarehouseCode, string? PartyId, string? SupplierCode, string? SupplierNameAr, decimal Quantity, decimal UnitCost, decimal TotalCost, decimal AverageCostAfter, decimal QuantityAfter, decimal ValueAfter, string? Notes, DateTime PostedAt, string? MovementType);
     private sealed record UnitChoice(string Id, string Label);
     private sealed record SessionProfile(string Sub, string Username, string[]? Roles, long Exp);
     private sealed record LoginResponse(string AccessToken, UserProfile User);

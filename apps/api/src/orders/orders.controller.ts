@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   Get,
   Headers,
   Param,
@@ -11,14 +12,18 @@ import {
   Res,
   UnauthorizedException,
   UploadedFile,
+  UploadedFiles,
   UseInterceptors,
 } from '@nestjs/common';
-import { FileInterceptor } from '@nestjs/platform-express';
+import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
+import { plainToInstance } from 'class-transformer';
+import { validate } from 'class-validator';
+import { ConfirmOrderDto } from './confirm-order.dto';
 import { IsArray, IsBoolean, IsDateString, IsIn, IsNotEmpty, IsNumber, IsOptional, IsString, IsUUID, Max, MaxLength, Min, MinLength, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
 import { createReadStream } from 'node:fs';
 import { AuthService } from '../auth/auth.service';
-import { CreateEngineeringCutListPartInput, OrdersService, UploadEngineeringFileMetadataInput, UploadedEngineeringFile } from './orders.service';
+import { CreateEngineeringCutListPartInput, CreateEngineeringProductMaterialLineInput, OrdersService, UploadEngineeringFileMetadataInput, UploadedEngineeringFile } from './orders.service';
 
 class CreateOrderDto {
   @IsString() @IsNotEmpty() @MaxLength(60) orderNo!: string;
@@ -29,7 +34,9 @@ class CreateOrderDto {
 }
 
 class CreateEngineeringPackageDto {
-  @IsString() @IsNotEmpty() @MaxLength(160) technicalReference!: string;
+  @IsString() @IsNotEmpty() @MaxLength(80) productCode!: string;
+  @IsString() @IsNotEmpty() @MaxLength(240) productDescription!: string;
+  @IsBoolean() upholsteryRequired!: boolean;
   @IsOptional() @IsString() @MaxLength(4000) notes?: string;
 }
 
@@ -51,7 +58,16 @@ class UploadEngineeringFileMetadataDto {
   @IsOptional() @Type(() => Number) @IsNumber({ maxDecimalPlaces: 2 }) @Min(0.01) @Max(99999999) thicknessMm?: number;
   @IsOptional() @Type(() => Number) @IsNumber({ maxDecimalPlaces: 2 }) @Min(0.01) @Max(999999999) boardLengthMm?: number;
   @IsOptional() @Type(() => Number) @IsNumber({ maxDecimalPlaces: 2 }) @Min(0.01) @Max(999999999) boardWidthMm?: number;
+  @IsOptional() @IsUUID() materialItemId?: string;
   @IsOptional() @Type(() => Number) @IsNumber({ maxDecimalPlaces: 4 }) @Min(0.0001) @Max(999999999) boardQuantity?: number;
+  @IsOptional() @Type(() => Number) @IsNumber({ maxDecimalPlaces: 2 }) @Min(0) @Max(100) wastePercentage?: number;
+}
+
+class CreateEngineeringProductMaterialLineDto implements CreateEngineeringProductMaterialLineInput {
+  @IsIn(['accessory', 'raw_material', 'paint']) lineType!: 'accessory' | 'raw_material' | 'paint';
+  @IsUUID() itemId!: string;
+  @Type(() => Number) @IsNumber({ maxDecimalPlaces: 4 }) @Min(0.0001) @Max(999999999) quantityPerUnit!: number;
+  @IsOptional() @IsString() @MaxLength(1000) notes?: string;
 }
 
 class CreateEngineeringCutListPartDto implements CreateEngineeringCutListPartInput {
@@ -66,8 +82,10 @@ class CreateEngineeringCutListPartDto implements CreateEngineeringCutListPartInp
 
 class CreateProductionOrderDto {
   @IsString() @IsNotEmpty() @MaxLength(60) orderNo!: string;
-  @IsUUID() engineeringPackageId!: string;
-  @IsString() @IsNotEmpty() @MaxLength(80) productCode!: string;
+  @IsOptional() @IsUUID() engineeringPackageId?: string;
+  @IsOptional() @IsString() @IsNotEmpty() @MaxLength(80) productCode?: string;
+  @IsOptional() @IsString() @IsNotEmpty() @MaxLength(240) jobName?: string;
+  @IsOptional() @IsDateString({strict:true}) plannedEndDate?: string;
   @IsNumber({ maxDecimalPlaces: 4 }) @Min(0.0001) @Max(999999999999) plannedQuantity!: number;
   @IsOptional() @IsString() @MaxLength(240) productName?: string;
   @IsOptional() @IsDateString() productionDate?: string;
@@ -110,6 +128,46 @@ export class OrdersController {
   async createOrder(@Headers('authorization') authorization: string, @Body() body: CreateOrderDto) {
     const user = await this.user(authorization);
     return this.service.createOrder(body, user.sub);
+  }
+
+  @Post('confirm')
+  @UseInterceptors(FilesInterceptor('files', 100, { limits: { fileSize: 20 * 1024 * 1024, fieldSize: 1024 * 1024, fields: 1 } }))
+  async confirmOrder(
+    @Headers('authorization') authorization: string,
+    @Body('payload') payload: string,
+    @UploadedFiles() files: UploadedEngineeringFile[] = [],
+  ) {
+    const user = await this.user(authorization);
+    let parsed: unknown;
+    try { parsed = JSON.parse(payload); }
+    catch { throw new BadRequestException('Invalid order payload.'); }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new BadRequestException('Invalid order payload.');
+    const body = plainToInstance(ConfirmOrderDto, parsed);
+    const errors = await validate(body, { whitelist: true, forbidNonWhitelisted: true });
+    if (errors.length) throw new BadRequestException(errors);
+    return this.service.confirmOrder(body, files, user.sub);
+  }
+
+  @Get(':orderId/details')
+  async orderDetails(@Headers('authorization') authorization: string, @Param('orderId', new ParseUUIDPipe()) orderId: string) {
+    await this.user(authorization);
+    return this.service.getOrderDetails(orderId);
+  }
+
+  @Get(':orderId/attachments/:fileId')
+  async downloadOrderAttachment(
+    @Headers('authorization') authorization: string,
+    @Param('orderId', new ParseUUIDPipe()) orderId: string,
+    @Param('fileId', new ParseUUIDPipe()) fileId: string,
+    @Res() response: any,
+  ) {
+    await this.user(authorization);
+    const file = await this.service.getOrderAttachment(orderId, fileId);
+    const asciiName = file.file_name.replace(/[^\x20-\x7E]|["\\]/g, '_');
+    response.setHeader('Content-Type', file.mime_type);
+    response.setHeader('X-Content-Type-Options', 'nosniff');
+    response.setHeader('Content-Disposition', `attachment; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(file.file_name)}`);
+    response.send(file.content);
   }
 
   @Get('production-orders')
@@ -177,6 +235,32 @@ export class OrdersController {
   ) {
     await this.user(authorization);
     return this.service.addEngineeringLine(packageId, body);
+  }
+
+  @Get('engineering-packages/:packageId/product-material-lines')
+  async listProductMaterialLines(@Headers('authorization') authorization: string, @Param('packageId', new ParseUUIDPipe()) packageId: string) {
+    await this.user(authorization);
+    return this.service.listEngineeringProductMaterialLines(packageId);
+  }
+
+  @Post('engineering-packages/:packageId/product-material-lines')
+  async addProductMaterialLine(
+    @Headers('authorization') authorization: string,
+    @Param('packageId', new ParseUUIDPipe()) packageId: string,
+    @Body() body: CreateEngineeringProductMaterialLineDto,
+  ) {
+    await this.user(authorization);
+    return this.service.addEngineeringProductMaterialLine(packageId, body);
+  }
+
+  @Delete('engineering-packages/:packageId/product-material-lines/:lineId')
+  async deleteProductMaterialLine(
+    @Headers('authorization') authorization: string,
+    @Param('packageId', new ParseUUIDPipe()) packageId: string,
+    @Param('lineId', new ParseUUIDPipe()) lineId: string,
+  ) {
+    await this.user(authorization);
+    return this.service.deleteEngineeringProductMaterialLine(packageId, lineId);
   }
 
   @Get('engineering-packages/:packageId/cut-list-parts')

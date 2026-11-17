@@ -8,6 +8,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, stat, unlink, writeFile } from 'node:fs/promises';
 import { extname, basename, resolve } from 'node:path';
 import { Pool, PoolClient, QueryResultRow } from 'pg';
+import { ConfirmOrderDto } from './confirm-order.dto';
 
 export interface CreateCustomerOrderInput {
   orderNo: string;
@@ -18,7 +19,9 @@ export interface CreateCustomerOrderInput {
 }
 
 export interface CreateEngineeringPackageInput {
-  technicalReference: string;
+  productCode: string;
+  productDescription: string;
+  upholsteryRequired: boolean;
   notes?: string;
 }
 
@@ -34,11 +37,13 @@ export interface CreateEngineeringLineInput {
 
 export interface CreateProductionOrderInput {
   orderNo: string;
-  engineeringPackageId: string;
-  productCode: string;
+  engineeringPackageId?: string;
+  productCode?: string;
   plannedQuantity: number;
   productName?: string;
   productionDate?: string;
+  jobName?: string;
+  plannedEndDate?: string;
 }
 
 export interface ProductionWorkOrderLineInput {
@@ -67,7 +72,16 @@ export interface UploadEngineeringFileMetadataInput {
   thicknessMm?: number;
   boardLengthMm?: number;
   boardWidthMm?: number;
+  materialItemId?: string;
   boardQuantity?: number;
+  wastePercentage?: number;
+}
+
+export interface CreateEngineeringProductMaterialLineInput {
+  lineType: 'accessory' | 'raw_material' | 'paint';
+  itemId: string;
+  quantityPerUnit: number;
+  notes?: string;
 }
 
 export interface CreateEngineeringCutListPartInput {
@@ -99,11 +113,14 @@ export class OrdersService {
 
   async listOrders() {
     const result = await this.pool.query(`
-      SELECT o.id, o.order_no AS "orderNo", o.customer_id AS "customerId",
+      SELECT o.id, o.order_no AS "orderNo", COALESCE(o.order_name,o.product_name,o.order_no) AS "orderName", o.customer_id AS "customerId",
              p.code AS "customerCode", p.name_ar AS "customerNameAr",
              o.order_date::text AS "orderDate",
              o.requested_delivery_date::text AS "requestedDeliveryDate",
              o.status, o.notes, o.created_at AS "createdAt",
+             o.product_code AS "productCode", o.product_name AS "productName",
+             o.total_boards AS "totalBoards", o.waste_percentage::text AS "wastePercentage",
+             o.confirmed_at AS "confirmedAt",
              ep.id AS "currentPackageId", ep.revision AS "currentRevision",
              (SELECT COUNT(*)::int FROM engineering_packages all_ep
               WHERE all_ep.customer_order_id = o.id) AS "revisionCount",
@@ -115,6 +132,95 @@ export class OrdersService {
         ON ep.customer_order_id = o.id AND ep.status = 'finalized'
       ORDER BY o.order_date DESC, o.created_at DESC`);
     return result.rows;
+  }
+
+  async confirmOrder(body: ConfirmOrderDto, files: UploadedEngineeringFile[], userId?: string) {
+    if (![body.orderNo, body.productCode, body.productName].every(x => x.trim().length))
+      throw new BadRequestException('Order code, product code and product name are required.');
+    if (body.attachments.length !== files.length) throw new BadRequestException('Attachment metadata does not match files.');
+    if (files.reduce((sum, file) => sum + file.size, 0) > 100 * 1024 * 1024)
+      throw new BadRequestException('Attachments exceed 100 MB in total.');
+    const allowedExtensions = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.pdf', '.xlsx', '.xls', '.csv', '.dxf', '.dwg', '.skp']);
+    for (let index = 0; index < files.length; index++) {
+      const file = files[index];
+      if (!body.attachments[index].name.trim() || !file.buffer?.length || file.buffer.length > 20 * 1024 * 1024 ||
+          !allowedExtensions.has(extname(file.originalname).toLowerCase()))
+        throw new BadRequestException('Use a named, nonempty image, PDF, spreadsheet or design file up to 20 MB.');
+    }
+    if (new Set(body.accessories.map(x => x.itemId)).size !== body.accessories.length)
+      throw new BadRequestException('Each accessory must appear once; enter its total quantity.');
+    const materials=body.materials??[];
+    if(new Set(materials.map(x=>x.itemId)).size!==materials.length)throw new BadRequestException('Each material must appear once; enter its total quantity.');
+    if(materials.length && body.totalBoards!==undefined && body.totalBoards!==0)throw new BadRequestException('Use material quantities instead of an untyped board total.');
+    if(body.orderName!==undefined&&!body.orderName.trim())throw new BadRequestException('Order name is required.');
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const customer = await client.query(`SELECT id FROM parties WHERE id = $1 AND active = true AND party_type IN ('customer', 'both') FOR SHARE`, [body.customerId]);
+      if (!customer.rowCount) throw new BadRequestException('Select an active customer.');
+      for (const line of body.accessories) {
+        const item = await client.query(`SELECT id FROM items WHERE id = $1 AND active = true AND item_type = 'accessory' FOR SHARE`, [line.itemId]);
+        if (!item.rowCount) throw new BadRequestException('Select an active accessory from master data.');
+      }
+      for(const line of materials){
+        const item=await client.query(`SELECT i.id,u.precision_digits FROM items i JOIN units_of_measure u ON u.id=i.base_unit_id
+          WHERE i.id=$1 AND i.active AND i.classification='materials' AND i.item_type IN ('raw_material','consumable') FOR SHARE OF i,u`,[line.itemId]);
+        if(!item.rowCount)throw new BadRequestException('Select an active raw material or consumable from master data.');
+        const precision=await client.query('SELECT $1::numeric>0 AND $1::numeric=ROUND($1::numeric,$2::int) AS valid',[String(line.quantity),Math.min(item.rows[0].precision_digits,4)]);
+        if(!precision.rows[0].valid)throw new BadRequestException('Material quantity does not match its unit precision.');
+      }
+      const order = await client.query(`
+        INSERT INTO customer_orders (order_no, customer_id, order_date, requested_delivery_date, notes, created_by,
+          product_code, product_name, total_boards, waste_percentage, confirmed_at,order_name)
+        VALUES ($1,$2,$3::date,$4::date,$5,$6,$7,$8,$9,$10::numeric,now(),$11)
+        RETURNING id, order_no AS "orderNo"`,
+        [body.orderNo.trim(), body.customerId, body.orderDate, body.requestedDeliveryDate || null,
+          cleanOptional(body.notes), userId ?? null, body.productCode.trim(), body.productName.trim(), body.totalBoards??null, String(body.wastePercentage),(body.orderName??body.productName).trim()]);
+      const id = order.rows[0].id;
+      for(const line of materials)await client.query('INSERT INTO customer_order_materials(order_id,item_id,quantity) VALUES($1,$2,$3::numeric)',[id,line.itemId,String(line.quantity)]);
+      for (const line of body.accessories)
+        await client.query('INSERT INTO customer_order_accessories (order_id,item_id,quantity) VALUES ($1,$2,$3::numeric)', [id, line.itemId, String(line.quantity)]);
+      for (let index = 0; index < files.length; index++) {
+        const file = files[index];
+        const metadata = body.attachments[index];
+        await client.query(`INSERT INTO customer_order_attachments
+          (order_id,attachment_type,name,description,color,file_name,mime_type,content)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+          [id, metadata.attachmentType, metadata.name.trim(), cleanOptional(metadata.description), cleanOptional(metadata.color),
+            basename(file.originalname.replace(/\\/g, '/')).replace(/[\r\n\0]/g, '').slice(0,255),
+            file.mimetype || 'application/octet-stream', file.buffer]);
+      }
+      await client.query('COMMIT');
+      return order.rows[0];
+    } catch (error) {
+      await safeRollback(client);
+      this.translateDatabaseError(error);
+    } finally { client.release(); }
+  }
+
+  async getOrderDetails(orderId: string) {
+    const order = await this.pool.query(`SELECT o.id, o.order_no AS "orderNo",COALESCE(o.order_name,o.product_name,o.order_no) AS "orderName",o.order_date::text AS "orderDate",o.requested_delivery_date::text AS "requestedDeliveryDate", o.product_code AS "productCode",
+      o.product_name AS "productName", o.total_boards AS "totalBoards", o.waste_percentage::text AS "wastePercentage",
+      o.notes, o.confirmed_at AS "confirmedAt", p.name_ar AS "customerNameAr"
+      FROM customer_orders o JOIN parties p ON p.id = o.customer_id WHERE o.id = $1`, [orderId]);
+    if (!order.rowCount) throw new NotFoundException('Order not found.');
+    const attachments = await this.pool.query(`SELECT id, name, description, color, attachment_type AS "attachmentType",
+      file_name AS "fileName", mime_type AS "mimeType", octet_length(content) AS "sizeBytes"
+      FROM customer_order_attachments WHERE order_id = $1 ORDER BY created_at, id`, [orderId]);
+    const accessories = await this.pool.query(`SELECT a.item_id AS "itemId", i.code AS "itemCode", i.name_ar AS "itemNameAr",
+      a.quantity::text AS quantity, u.code AS "unitCode"
+      FROM customer_order_accessories a JOIN items i ON i.id = a.item_id
+      JOIN units_of_measure u ON u.id = i.base_unit_id WHERE a.order_id = $1 ORDER BY i.code`, [orderId]);
+    const materials=await this.pool.query(`SELECT m.item_id AS "itemId",i.code AS "itemCode",i.name_ar AS "itemNameAr",m.quantity::text AS quantity,u.code AS "unitCode"
+      FROM customer_order_materials m JOIN items i ON i.id=m.item_id JOIN units_of_measure u ON u.id=i.base_unit_id WHERE m.order_id=$1 ORDER BY i.code`,[orderId]);
+    const jobs=await this.pool.query(`SELECT id,order_no AS "orderNo",job_name AS "jobName",production_date::text AS "startDate",planned_end_date::text AS "endDate",planned_quantity::text AS quantity,status FROM production_orders WHERE customer_order_id=$1 ORDER BY created_at,order_no`,[orderId]);
+    return { ...order.rows[0], attachments: attachments.rows, accessories: accessories.rows,materials:materials.rows,jobs:jobs.rows };
+  }
+
+  async getOrderAttachment(orderId: string, fileId: string) {
+    const result = await this.pool.query('SELECT file_name, mime_type, content FROM customer_order_attachments WHERE order_id = $1 AND id = $2', [orderId, fileId]);
+    if (!result.rowCount) throw new NotFoundException('Attachment not found.');
+    return result.rows[0];
   }
 
   async createOrder(body: CreateCustomerOrderInput, userId?: string) {
@@ -145,9 +251,12 @@ export class OrdersService {
     await this.ensureOrderExists(orderId);
     const result = await this.pool.query(`
       SELECT ep.id, ep.customer_order_id AS "customerOrderId", ep.revision,
+             ep.product_code AS "productCode", ep.product_description AS "productDescription",
+             ep.upholstery_required AS "upholsteryRequired",
              ep.technical_reference AS "technicalReference", ep.notes, ep.status,
              ep.created_at AS "createdAt", ep.finalized_at AS "finalizedAt",
              (SELECT COUNT(*)::int FROM engineering_material_lines ml WHERE ml.package_id = ep.id) AS "lineCount",
+             (SELECT COUNT(*)::int FROM engineering_product_material_lines pml WHERE pml.package_id = ep.id) AS "productMaterialLineCount",
              (SELECT COUNT(*)::int FROM engineering_package_files f WHERE f.package_id = ep.id) AS "fileCount"
       FROM engineering_packages ep
       WHERE ep.customer_order_id = $1
@@ -167,12 +276,16 @@ export class OrdersService {
       const revision = Number(revisionResult.rows[0].revision);
       const result = await client.query(`
         INSERT INTO engineering_packages
-          (customer_order_id, revision, technical_reference, notes, status, created_by)
-        VALUES ($1, $2, $3, $4, 'draft', $5)
+          (customer_order_id, revision, product_code, product_description, upholstery_required,
+           technical_reference, notes, status, created_by)
+        VALUES ($1, $2, $3, $4, $5, $3, $6, 'draft', $7)
         RETURNING id, customer_order_id AS "customerOrderId", revision,
+                  product_code AS "productCode", product_description AS "productDescription",
+                  upholstery_required AS "upholsteryRequired",
                   technical_reference AS "technicalReference", notes, status,
                   created_at AS "createdAt", finalized_at AS "finalizedAt"`,
-        [orderId, revision, clean(body.technicalReference), cleanOptional(body.notes), userId ?? null],
+        [orderId, revision, clean(body.productCode), clean(body.productDescription), body.upholsteryRequired,
+          cleanOptional(body.notes), userId ?? null],
       );
       await client.query('COMMIT');
       return result.rows[0];
@@ -217,6 +330,102 @@ export class OrdersService {
       );
       await client.query('COMMIT');
       return result.rows[0];
+    } catch (error) {
+      await safeRollback(client);
+      this.translateDatabaseError(error);
+    } finally {
+      client.release();
+    }
+  }
+
+  async listEngineeringProductMaterialLines(packageId: string) {
+    await this.ensurePackageExists(packageId);
+    const result = await this.pool.query(`
+      SELECT l.id, l.package_id AS "packageId", l.line_no AS "lineNo",
+             l.line_type AS "lineType", l.item_id AS "itemId",
+             i.code AS "itemCode", i.name_ar AS "itemNameAr",
+             u.code AS "unitCode", u.name_ar AS "unitNameAr",
+             l.quantity_per_unit::text AS "quantityPerUnit", l.notes,
+             l.created_at AS "createdAt"
+      FROM engineering_product_material_lines l
+      JOIN items i ON i.id = l.item_id
+      JOIN units_of_measure u ON u.id = i.base_unit_id
+      WHERE l.package_id = $1 ORDER BY l.line_no`, [packageId]);
+    return result.rows;
+  }
+
+  async addEngineeringProductMaterialLine(packageId: string, body: CreateEngineeringProductMaterialLineInput) {
+    if (!Number.isFinite(body.quantityPerUnit) || body.quantityPerUnit <= 0)
+      throw new BadRequestException('الكمية لكل وحدة يجب أن تكون أكبر من صفر.');
+
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await this.lockDraftPackage(client, packageId);
+      const itemResult = await client.query(`
+        SELECT id, item_type, classification, stock_tracked, active
+        FROM items WHERE id = $1 FOR SHARE`, [body.itemId]);
+      const item = itemResult.rows[0];
+      if (!item || !item.active) throw new BadRequestException('الصنف المختار غير موجود أو غير نشط.');
+      const validItemType = body.lineType === 'accessory'
+        ? item.item_type === 'accessory'
+        : body.lineType === 'raw_material'
+          ? item.item_type === 'raw_material'
+          : ['consumable', 'raw_material'].includes(item.item_type);
+      if (!validItemType) {
+        throw new BadRequestException(body.lineType === 'accessory'
+          ? 'اختر صنفاً من نوع إكسسوار من البيانات الأساسية.'
+          : body.lineType === 'raw_material'
+            ? 'اختر صنفاً من نوع خامة من البيانات الأساسية.'
+            : 'اختر دهاناً/مستهلكاً أو خامة من البيانات الأساسية.');
+      }
+      const lineNoResult = await client.query(
+        'SELECT COALESCE(MAX(line_no), 0) + 1 AS line_no FROM engineering_product_material_lines WHERE package_id = $1',
+        [packageId],
+      );
+      const result = await client.query(`
+        INSERT INTO engineering_product_material_lines
+          (package_id, line_no, line_type, item_id, quantity_per_unit, notes)
+        VALUES ($1, $2, $3, $4, $5::numeric, $6)
+        RETURNING id, package_id AS "packageId", line_no AS "lineNo",
+                  line_type AS "lineType", item_id AS "itemId",
+                  quantity_per_unit::text AS "quantityPerUnit", notes, created_at AS "createdAt"`,
+        [packageId, Number(lineNoResult.rows[0].line_no), body.lineType, body.itemId,
+          String(body.quantityPerUnit), cleanOptional(body.notes)],
+      );
+      const full = await client.query(`
+        SELECT l.id, l.package_id AS "packageId", l.line_no AS "lineNo",
+               l.line_type AS "lineType", l.item_id AS "itemId",
+               i.code AS "itemCode", i.name_ar AS "itemNameAr",
+               u.code AS "unitCode", u.name_ar AS "unitNameAr",
+               l.quantity_per_unit::text AS "quantityPerUnit", l.notes,
+               l.created_at AS "createdAt"
+        FROM engineering_product_material_lines l
+        JOIN items i ON i.id = l.item_id
+        JOIN units_of_measure u ON u.id = i.base_unit_id
+        WHERE l.id = $1`, [result.rows[0].id]);
+      await client.query('COMMIT');
+      return full.rows[0];
+    } catch (error) {
+      await safeRollback(client);
+      this.translateDatabaseError(error);
+    } finally {
+      client.release();
+    }
+  }
+
+  async deleteEngineeringProductMaterialLine(packageId: string, lineId: string) {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await this.lockDraftPackage(client, packageId);
+      const result = await client.query(
+        'DELETE FROM engineering_product_material_lines WHERE id = $1 AND package_id = $2 RETURNING id',
+        [lineId, packageId],
+      );
+      if (!result.rowCount) throw new NotFoundException('بند الخامة/الإكسسوار غير موجود.');
+      await client.query('COMMIT');
+      return { deleted: true, id: lineId };
     } catch (error) {
       await safeRollback(client);
       this.translateDatabaseError(error);
@@ -298,7 +507,7 @@ export class OrdersService {
       // Keep lock ordering consistent with production-order creation: order first, then package.
       await this.lockOrder(client, customerOrderId);
       const packageResult = await client.query(
-        'SELECT id, customer_order_id, status FROM engineering_packages WHERE id = $1 FOR UPDATE',
+        'SELECT id, customer_order_id, status, product_code FROM engineering_packages WHERE id = $1 FOR UPDATE',
         [packageId],
       );
       const current = packageResult.rows[0];
@@ -311,15 +520,20 @@ export class OrdersService {
       if (current.status === 'superseded') {
         throw new ConflictException('هذه نسخة قديمة؛ أنشئ نسخة جديدة بدلاً من إعادة تفعيلها.');
       }
-      const meaningfulContent = await client.query(`
+      if (!cleanOptional(current.product_code)) {
+        throw new BadRequestException('كود المنتج مطلوب قبل تثبيت النسخة الفنية.');
+      }
+      const requiredFiles = await client.query(`
         SELECT
-          (SELECT COUNT(*) FROM engineering_material_lines WHERE package_id = $1) AS material_lines,
-          (SELECT COUNT(*) FROM engineering_package_files
-             WHERE package_id = $1 AND attachment_type IN ('dimensioned_drawing', 'cut_list')) AS engineering_outputs,
-          (SELECT COUNT(*) FROM engineering_cutlist_parts WHERE package_id = $1) AS cutlist_parts`, [packageId]);
-      const contentCounts = meaningfulContent.rows[0];
-      if (Number(contentCounts.material_lines) + Number(contentCounts.engineering_outputs) + Number(contentCounts.cutlist_parts) === 0) {
-        throw new BadRequestException('أضف بند خامات أو ارفع رسماً هندسياً/كاتلست قبل تثبيت النسخة.');
+          COUNT(*) FILTER (WHERE attachment_type = 'product_reference')::int AS product_reference_count,
+          COUNT(*) FILTER (WHERE attachment_type = 'cut_list')::int AS cut_list_count
+        FROM engineering_package_files WHERE package_id = $1`, [packageId]);
+      const requiredCounts = requiredFiles.rows[0];
+      if (Number(requiredCounts.product_reference_count) < 1) {
+        throw new BadRequestException('ارفع صورة المنتج المرجعية قبل تثبيت النسخة الفنية.');
+      }
+      if (Number(requiredCounts.cut_list_count) < 1) {
+        throw new BadRequestException('أضف كاتلست واحداً على الأقل قبل تثبيت النسخة الفنية.');
       }
       await client.query(`UPDATE engineering_packages SET status = 'superseded'
         WHERE customer_order_id = $1 AND status = 'finalized'`, [current.customer_order_id]);
@@ -341,7 +555,8 @@ export class OrdersService {
       SELECT id, package_id AS "packageId", file_name AS "fileName", mime_type AS "mimeType",
              size_bytes AS "sizeBytes", checksum_sha256 AS "checksumSha256",
              attachment_type AS "attachmentType", description,
-             material_code AS "materialCode", material_color AS "materialColor",
+             material_code AS "materialCode", material_item_id AS "materialItemId",
+             material_color AS "materialColor", waste_percentage::text AS "wastePercentage",
              thickness_mm::text AS "thicknessMm", board_length_mm::text AS "boardLengthMm",
              board_width_mm::text AS "boardWidthMm", board_quantity::text AS "boardQuantity",
              created_at AS "createdAt"
@@ -361,12 +576,12 @@ export class OrdersService {
     const allowedTypes = new Set<EngineeringAttachmentType>(['product_reference', 'dimensioned_drawing', 'cut_list', 'bom_export', 'other']);
     if (!allowedTypes.has(attachmentType)) throw new BadRequestException('نوع المرفق غير معروف.');
     if (attachmentType === 'cut_list') {
-      if (!cleanOptional(metadata.materialCode) || !cleanOptional(metadata.materialColor))
-        throw new BadRequestException('حدد كود/نوع اللوح ولونه لمرفق الكاتلست.');
-      for (const [label, value] of [['سمك اللوح', metadata.thicknessMm], ['طول اللوح', metadata.boardLengthMm], ['عرض اللوح', metadata.boardWidthMm], ['عدد الألواح', metadata.boardQuantity]] as const) {
-        if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0)
-          throw new BadRequestException(`أدخل ${label} بقيمة أكبر من صفر لمرفق الكاتلست.`);
-      }
+      if (!metadata.materialItemId || !cleanOptional(metadata.materialColor))
+        throw new BadRequestException('اختر خامة اللوح وحدد اللون لمرفق الكاتلست.');
+      if (typeof metadata.boardQuantity !== 'number' || !Number.isFinite(metadata.boardQuantity) || metadata.boardQuantity <= 0)
+        throw new BadRequestException('أدخل عدد الألواح بقيمة أكبر من صفر.');
+      if (typeof metadata.wastePercentage !== 'number' || !Number.isFinite(metadata.wastePercentage) || metadata.wastePercentage < 0 || metadata.wastePercentage > 100)
+        throw new BadRequestException('أدخل نسبة هالك من 0 إلى 100.');
     }
     const originalName = basename(file.originalname.replace(/\\/g, '/')).replace(/[\r\n\0]/g, '').trim();
     const extension = extname(originalName).toLowerCase();
@@ -380,6 +595,18 @@ export class OrdersService {
     try {
       await client.query('BEGIN');
       await this.lockDraftPackage(client, packageId);
+      let boardItemCode: string | null = null;
+      if (attachmentType === 'cut_list') {
+        const boardItemResult = await client.query(`
+          SELECT id, code, item_type, stock_tracked, classification, active
+          FROM items WHERE id = $1 FOR SHARE`, [metadata.materialItemId]);
+        const boardItem = boardItemResult.rows[0];
+        if (!boardItem || !boardItem.active || boardItem.item_type !== 'raw_material' ||
+            !boardItem.stock_tracked || boardItem.classification !== 'materials') {
+          throw new BadRequestException('خامة اللوح يجب أن تكون خامة نشطة ومتابعة بالمخزون من البيانات الأساسية.');
+        }
+        boardItemCode = boardItem.code as string;
+      }
       await mkdir(this.storageDirectory, { recursive: true });
       const storageKey = `${randomUUID()}${extension}`;
       storedPath = resolve(this.storageDirectory, storageKey);
@@ -388,23 +615,23 @@ export class OrdersService {
       const result = await client.query(`
         INSERT INTO engineering_package_files
           (package_id, file_name, mime_type, size_bytes, storage_key, checksum_sha256, uploaded_by,
-           attachment_type, description, material_code, material_color, thickness_mm,
-           board_length_mm, board_width_mm, board_quantity)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::numeric, $13::numeric, $14::numeric, $15::numeric)
+           attachment_type, description, material_code, material_color, material_item_id,
+           waste_percentage, thickness_mm, board_length_mm, board_width_mm, board_quantity)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::numeric, NULL, NULL, NULL, $14::numeric)
         RETURNING id, package_id AS "packageId", file_name AS "fileName", mime_type AS "mimeType",
                   size_bytes AS "sizeBytes", checksum_sha256 AS "checksumSha256",
                   attachment_type AS "attachmentType", description,
-                  material_code AS "materialCode", material_color AS "materialColor",
+                  material_code AS "materialCode", material_item_id AS "materialItemId",
+                  material_color AS "materialColor", waste_percentage::text AS "wastePercentage",
                   thickness_mm::text AS "thicknessMm", board_length_mm::text AS "boardLengthMm",
                   board_width_mm::text AS "boardWidthMm", board_quantity::text AS "boardQuantity",
                   created_at AS "createdAt"`,
         [packageId, originalName.slice(0, 255), file.mimetype || 'application/octet-stream', file.size,
           storageKey, checksum, userId ?? null, attachmentType, cleanOptional(metadata.description),
-          attachmentType === 'cut_list' ? cleanOptional(metadata.materialCode) : null,
+          attachmentType === 'cut_list' ? boardItemCode : null,
           attachmentType === 'cut_list' ? cleanOptional(metadata.materialColor) : null,
-          attachmentType === 'cut_list' ? String(metadata.thicknessMm) : null,
-          attachmentType === 'cut_list' ? String(metadata.boardLengthMm) : null,
-          attachmentType === 'cut_list' ? String(metadata.boardWidthMm) : null,
+          attachmentType === 'cut_list' ? metadata.materialItemId : null,
+          attachmentType === 'cut_list' ? String(metadata.wastePercentage) : null,
           attachmentType === 'cut_list' ? String(metadata.boardQuantity) : null],
       );
       await client.query('COMMIT');
@@ -437,7 +664,7 @@ export class OrdersService {
 
   async listProductionOrders() {
     const result = await this.pool.query(`
-      SELECT po.id, po.order_no AS "orderNo", po.production_mode AS "productionMode",
+      SELECT po.id, po.order_no AS "orderNo",po.job_name AS "jobName",po.planned_end_date::text AS "plannedEndDate", po.production_mode AS "productionMode",
              po.customer_order_id AS "customerOrderId", co.order_no AS "customerOrderNo",
              p.name_ar AS "customerNameAr",
              po.engineering_package_id AS "engineeringPackageId", ep.revision AS "engineeringRevision",
@@ -457,27 +684,48 @@ export class OrdersService {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
-      await this.lockOrder(client, orderId);
-      const packageResult = await client.query(`
-        SELECT id, status FROM engineering_packages
-        WHERE id = $1 AND customer_order_id = $2 FOR UPDATE`, [body.engineeringPackageId, orderId]);
-      if (!packageResult.rowCount) throw new BadRequestException('النسخة الفنية لا تخص الطلب المحدد.');
-      if (packageResult.rows[0].status !== 'finalized') {
-        throw new BadRequestException('ثبّت النسخة الفنية أولاً قبل إنشاء أمر الإنتاج.');
+      const orderResult = await client.query(
+        'SELECT id, status, confirmed_at,product_code,product_name,order_date::text,requested_delivery_date::text FROM customer_orders WHERE id = $1 FOR UPDATE', [orderId]);
+      const order = orderResult.rows[0];
+      if (!order) throw new NotFoundException('الطلب غير موجود.');
+      if (order.status !== 'open') throw new BadRequestException('لا يمكن إنشاء أمر شغل لطلب ملغي.');
+      let packageId: string | null = body.engineeringPackageId ?? null;
+      let legacyProductCode:string|undefined,legacyProductName:string|undefined;
+      // Historical orders can retain their finalized revision. Confirmed orders
+      // from the complete order form are themselves the source for the job sheet.
+      if (packageId || !order.confirmed_at) {
+        const packageResult = await client.query(`
+          SELECT id, status,product_code,product_description FROM engineering_packages
+          WHERE customer_order_id = $1 AND ($2::uuid IS NULL OR id = $2)
+            AND status = 'finalized' ORDER BY revision DESC LIMIT 1 FOR UPDATE`, [orderId, packageId]);
+        if (!packageResult.rowCount) throw new BadRequestException('أكد بيانات الطلب أولاً أو استخدم طلباً قديماً له نسخة فنية مثبتة.');
+        packageId = packageResult.rows[0].id;
+        legacyProductCode=packageResult.rows[0].product_code;
+        legacyProductName=packageResult.rows[0].product_description;
       }
+      // Confirmed parent identity is authoritative; callers cannot silently create
+      // a job for a different product beneath the selected customer order.
+      const productCode=order.product_code??legacyProductCode??body.productCode;
+      const productName=order.product_name??legacyProductName??body.productName??productCode;
+      if(!productCode?.trim()||!productName?.trim())throw new BadRequestException('The selected order needs a product code and name.');
+      const start=body.productionDate??order.order_date??new Date().toISOString().slice(0,10);
+      const end=body.plannedEndDate??(body.productionDate?null:order.requested_delivery_date)??null;
+      if(!body.orderNo.trim()||(body.jobName!==undefined&&!body.jobName.trim()))throw new BadRequestException('A job code and nonempty job name are required.');
+      if(!/^\d{4}-\d{2}-\d{2}$/.test(start)||(end&&!/^\d{4}-\d{2}-\d{2}$/.test(end)))throw new BadRequestException('Use YYYY-MM-DD for job dates.');
+      if(end&&end<start)throw new BadRequestException('The job finish date cannot precede its start date.');
       const result = await client.query(`
         INSERT INTO production_orders
           (order_no, production_mode, customer_order_id, engineering_package_id,
-           product_code, product_name, production_date, planned_quantity, status, created_by)
-        VALUES ($1, 'customer_order', $2, $3, $4, $5, COALESCE($6::date, CURRENT_DATE), $7::numeric, 'draft', $8)
+             product_code, product_name, production_date, planned_quantity, status, created_by,job_name,planned_end_date)
+          VALUES ($1, 'customer_order', $2, $3, $4, $5, COALESCE($6::date, CURRENT_DATE), $7::numeric, 'draft', $8,$9,$10::date)
         RETURNING id, order_no AS "orderNo", production_mode AS "productionMode",
                   customer_order_id AS "customerOrderId", engineering_package_id AS "engineeringPackageId",
                   product_code AS "productCode", product_name AS "productName",
                   production_date::text AS "productionDate", planned_quantity::text AS "plannedQuantity",
                   status, created_at AS "createdAt"`,
-        [clean(body.orderNo), orderId, body.engineeringPackageId, clean(body.productCode),
-          clean(body.productName || body.productCode), body.productionDate || null,
-          String(body.plannedQuantity), userId ?? null],
+          [clean(body.orderNo), orderId, packageId, clean(productCode),
+            clean(productName), start,
+            String(body.plannedQuantity), userId ?? null,clean(body.jobName??body.orderNo),end],
       );
       await client.query('COMMIT');
       return result.rows[0];
@@ -491,7 +739,7 @@ export class OrdersService {
 
   async getProductionWorkOrder(productionOrderId: string) {
     const orderResult = await this.pool.query(`
-      SELECT po.id, po.order_no AS "orderNo", po.production_mode AS "productionMode",
+      SELECT po.id, po.order_no AS "orderNo",po.job_name AS "jobName",po.planned_end_date::text AS "plannedEndDate", po.production_mode AS "productionMode",
              po.customer_order_id AS "customerOrderId", co.order_no AS "customerOrderNo",
              p.name_ar AS "customerNameAr", po.engineering_package_id AS "engineeringPackageId",
              ep.revision AS "engineeringRevision", ep.technical_reference AS "technicalReference",
@@ -607,8 +855,13 @@ export class OrdersService {
   private async getPackage(packageId: string) {
     const result = await this.pool.query(`
       SELECT id, customer_order_id AS "customerOrderId", revision,
+             product_code AS "productCode", product_description AS "productDescription",
+             upholstery_required AS "upholsteryRequired",
              technical_reference AS "technicalReference", notes, status,
-             created_at AS "createdAt", finalized_at AS "finalizedAt"
+             created_at AS "createdAt", finalized_at AS "finalizedAt",
+             (SELECT COUNT(*)::int FROM engineering_material_lines ml WHERE ml.package_id = engineering_packages.id) AS "lineCount",
+             (SELECT COUNT(*)::int FROM engineering_product_material_lines pml WHERE pml.package_id = engineering_packages.id) AS "productMaterialLineCount",
+             (SELECT COUNT(*)::int FROM engineering_package_files f WHERE f.package_id = engineering_packages.id) AS "fileCount"
       FROM engineering_packages WHERE id = $1`, [packageId]);
     if (!result.rowCount) throw new NotFoundException('النسخة الفنية غير موجودة.');
     return result.rows[0];

@@ -22,7 +22,7 @@ export class InventoryService {
 
   async movements() {
     const result = await this.pool.query(`
-      SELECT m.id, m.operation_id AS "operationId", m.document_reference AS "documentReference",
+      SELECT m.id, m.movement_type AS "movementType", m.operation_id AS "operationId", m.document_reference AS "documentReference",
              m.movement_date AS "movementDate", m.item_id AS "itemId", i.code AS "itemCode",
              i.name_ar AS "itemNameAr", m.warehouse_id AS "warehouseId", w.code AS "warehouseCode",
              m.party_id AS "partyId", p.code AS "supplierCode", p.name_ar AS "supplierNameAr",
@@ -44,6 +44,7 @@ export class InventoryService {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', ['inventory-receipt:' + body.operationId]);
       // An identical retry returns the already-posted result and never applies stock twice.
       const existing = await client.query(
         `SELECT id, operation_id AS "operationId", item_id AS "itemId", warehouse_id AS "warehouseId",
@@ -61,6 +62,10 @@ export class InventoryService {
         await client.query('COMMIT');
         return { ...row, alreadyPosted: true };
       }
+
+      await client.query(`INSERT INTO accounting_periods(month) VALUES(date_trunc('month',$1::date)::date) ON CONFLICT DO NOTHING`,[body.movementDate]);
+      const period = await client.query(`SELECT status FROM accounting_periods WHERE month=date_trunc('month',$1::date)::date FOR SHARE`,[body.movementDate]);
+      if (period.rows[0].status !== 'open') throw new ConflictException('الفترة مغلقة؛ لا يمكن ترحيل استلام مخزني إليها.');
 
       const itemResult = await client.query(
         `SELECT id, code, item_type, stock_tracked, classification FROM items WHERE id = $1 AND active = true FOR SHARE`,
@@ -87,14 +92,16 @@ export class InventoryService {
       await client.query(`INSERT INTO inventory_item_costs(item_id) VALUES ($1) ON CONFLICT (item_id) DO NOTHING`, [body.itemId]);
       const costResult = await client.query(
         `SELECT quantity_on_hand, inventory_value FROM inventory_item_costs WHERE item_id = $1 FOR UPDATE`, [body.itemId]);
-      const oldQty = Number(costResult.rows[0].quantity_on_hand);
-      const oldValue = Number(costResult.rows[0].inventory_value);
-      const qty = Number(body.quantity);
-      const unitCost = Number(body.unitCost);
-      const lineCost = Number((qty * unitCost).toFixed(4));
-      const newQty = Number((oldQty + qty).toFixed(4));
-      const newValue = Number((oldValue + lineCost).toFixed(4));
-      const average = newQty > 0 ? Number((newValue / newQty).toFixed(4)) : 0;
+      const qty = String(body.quantity), unitCost = String(body.unitCost);
+      const latest = await client.query('SELECT MAX(movement_date)::text AS date FROM inventory_movements WHERE item_id=$1', [body.itemId]);
+      if (latest.rows[0].date && body.movementDate < latest.rows[0].date) throw new ConflictException('تاريخ الاستلام يسبق آخر حركة تكلفة للصنف؛ استخدم تصحيحاً معتمداً.');
+      const future = await client.query('SELECT $1::date<=CURRENT_DATE AS valid',[body.movementDate]);
+      if (!future.rows[0].valid) throw new BadRequestException('لا يمكن تسجيل استلام في المستقبل.');
+      const math = await client.query(`WITH m AS (SELECT ROUND($1::numeric*$2::numeric,4) AS line_cost,
+        $3::numeric+$1::numeric AS quantity), n AS (SELECT *, $4::numeric+line_cost AS value FROM m)
+        SELECT line_cost::text,quantity::text,value::text,ROUND(value/quantity,4)::text AS average FROM n`,
+        [qty,unitCost,costResult.rows[0].quantity_on_hand,costResult.rows[0].inventory_value]);
+      const {line_cost: lineCost,quantity: newQty,value: newValue,average} = math.rows[0];
 
       await client.query(`
         INSERT INTO inventory_balances(item_id, warehouse_id, quantity_on_hand)

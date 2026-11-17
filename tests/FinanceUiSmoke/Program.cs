@@ -1,0 +1,42 @@
+using System.Collections;
+using System.Reflection;
+using System.Text;
+using System.Text.Json;
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Interactivity;
+using Avalonia.LogicalTree;
+using Avalonia.Threading;
+using WoodFactoryErp.Desktop;
+
+// Construct forms without restoring any real session, showing a window or using a server.
+AppBuilder.Configure<Application>().UsePlatformDetect().SetupWithoutStarting();
+var flags=BindingFlags.Instance|BindingFlags.NonPublic;
+var window=(MainWindow)Activator.CreateInstance(typeof(MainWindow),flags,null,new object[]{false},null)!;
+object Field(string n)=>typeof(MainWindow).GetField(n,flags)!.GetValue(window)!;
+object? Invoke(string n,params object?[] args)=>typeof(MainWindow).GetMethod(n,flags)!.Invoke(window,args);
+void Check(bool b,string m){if(!b)throw new Exception(m);}
+Invoke("BuildFinance");
+var root=(StackPanel)Field("financeRoot");var tabs=root.GetLogicalDescendants().OfType<TabControl>().Single();
+var items=((IEnumerable<TabItem>)tabs.ItemsSource!).ToList();
+Check(items.Count==8,"Finance has dedicated operational/report/configuration tabs");
+var all=root.GetLogicalDescendants().OfType<Control>().Concat(items.SelectMany(i=>((Control)i.Content!).GetLogicalDescendants().OfType<Control>())).Distinct().ToList();
+Check(all.OfType<AutoCompleteBox>().Count()>=25,"Financial master/source selectors are searchable");
+Check(all.OfType<AutoCompleteBox>().All(b=>b.FilterMode==AutoCompleteFilterMode.Contains),"All finance selectors search names/codes");
+var save=all.OfType<Button>().First(b=>Equals(b.Content,"مراجعة وحفظ المستند"));save.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));Dispatcher.UIThread.RunJobs();
+Check(all.OfType<TextBlock>().Any(t=>t.Text?.Contains("اكتب مرجعاً فريداً") == true),"Invalid financial action shows inline feedback before posting");
+var form=((IEnumerable)Field("financeForms")).Cast<object>().First();
+var reference=(TextBox)form.GetType().GetField("Reference")!.GetValue(form)!;
+var user=Guid.NewGuid().ToString();var token=Convert.ToBase64String(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new{sub=user}))).TrimEnd('=').Replace('+','-').Replace('/','_')+".test";
+typeof(MainWindow).GetField("accessToken",flags)!.SetValue(window,token);
+var directory=Path.Combine(Path.GetTempPath(),"erp-finance-ui-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(directory);
+var outboxType=typeof(MainWindow).Assembly.GetType("WoodFactoryErp.Desktop.ProductionOutbox")!;
+using var outbox=(IDisposable)Activator.CreateInstance(outboxType,Path.Combine(directory,"finance.sqlite"))!;
+typeof(MainWindow).GetField("financeOutbox",flags)!.SetValue(window,outbox);
+typeof(MainWindow).GetField("financeDraftUser",flags)!.SetValue(window,user);
+reference.Text="AR-DRAFT-001";Invoke("SaveFinanceDrafts");Invoke("ClearFinanceSession");Check(reference.Text=="","Sign out clears the visible financial draft");Invoke("RestoreFinanceDrafts");Check(reference.Text=="AR-DRAFT-001","Draft survives SQLite save and restore for the same user");
+Invoke("ClearFinanceSession");typeof(MainWindow).GetField("accessToken",flags)!.SetValue(window,Convert.ToBase64String(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new{sub=Guid.NewGuid().ToString()}))).TrimEnd('=').Replace('+','-').Replace('/','_')+".test");Invoke("RestoreFinanceDrafts");Check(reference.Text=="","Another account cannot restore the previous user's financial draft");
+var pdfType=typeof(MainWindow).Assembly.GetType("WoodFactoryErp.Desktop.Documents.FinanceDocumentPdf")!;
+var pdf=(byte[])pdfType.GetMethod("Generate")!.Invoke(null,new object[]{"فاتورة داخلية","TEST-1","1","2026-11-17","عميل","2700.0000","378.0000","0.0000","3078.0000","اختبار",new List<string[]>{new[]{"منتج","1","3000","300","378","3078"}}})!;
+Check(Encoding.ASCII.GetString(pdf,0,4)=="%PDF"&&pdf.Length>1000,"Arabic internal document renders as a real PDF");
+Console.WriteLine("PASS: Finance form construction, searchable tables/selectors, inline validation, durable account-scoped drafts, and Arabic PDF generation.");

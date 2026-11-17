@@ -1,0 +1,8 @@
+const {test}=require('node:test');const assert=require('node:assert/strict');const {createHmac,randomUUID}=require('node:crypto');
+require('../apps/api/node_modules/reflect-metadata');const {AuthService}=require('../apps/api/dist/auth/auth.service');
+const sub=randomUUID();
+function setup(rows=[{id:sub,username:'operator',roles:['finance_viewer']}]){const service=new AuthService();service.secret='test-only';let queries=0;service.pool={async query(){queries++;return {rows,rowCount:rows.length};}};const token=(extra={})=>{const payload=Buffer.from(JSON.stringify({sub,roles:['system_admin'],exp:Math.floor(Date.now()/1000)+100,...extra})).toString('base64url');return payload+'.'+createHmac('sha256','test-only').update(payload).digest('base64url');};return {service,token,queries:()=>queries};}
+test('a valid old admin token receives current database permissions',async()=>{const h=setup();assert.deepEqual((await h.service.me(h.token())).roles,['finance_viewer']);});
+test('disabled users cannot continue using an otherwise valid session',async()=>{const h=setup([]);await assert.rejects(h.service.me(h.token()),e=>e.getStatus()===401);});
+test('malformed signature lengths return unauthorized instead of a crypto exception',async()=>{const h=setup();for(const token of ['bad.x','bad','a.b.c'])await assert.rejects(h.service.me(token),e=>e.getStatus()===401);assert.equal(h.queries(),0);});
+test('expired or invalid signed sessions are rejected before database access',async()=>{const h=setup();for(const exp of [0,null,'future'])await assert.rejects(h.service.me(h.token({exp})),e=>e.getStatus()===401);assert.equal(h.queries(),0);});
