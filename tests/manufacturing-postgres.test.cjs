@@ -1,0 +1,27 @@
+// Opt-in: point only at a disposable database. Never loads project .env.
+const {test}=require('node:test'),assert=require('node:assert/strict'),{randomUUID}=require('node:crypto'),fs=require('node:fs'),path=require('node:path');
+require('../apps/api/node_modules/reflect-metadata');const {Pool}=require('../apps/api/node_modules/pg');
+const {ProductionService}=require('../apps/api/dist/production/production.service');const {FinanceService}=require('../apps/api/dist/finance/finance.service');
+test('PostgreSQL manufacturing: exact costing, worker identity, concurrent duplicates, QC without phase progress and finance source reuse',{skip:!process.env.MANUFACTURING_TEST_DATABASE_URL,timeout:120000},async()=>{
+ const schema='manufacturing_test_'+randomUUID().replaceAll('-','');assert.match(schema,/^manufacturing_test_[a-f0-9]{32}$/);const admin=new Pool({connectionString:process.env.MANUFACTURING_TEST_DATABASE_URL,connectionTimeoutMillis:5000});let pool;
+ try{
+  await admin.query(`CREATE SCHEMA ${schema}`);pool=new Pool({connectionString:process.env.MANUFACTURING_TEST_DATABASE_URL,options:`-c search_path=${schema},public`,max:6,connectionTimeoutMillis:5000});
+  const c=await pool.connect();try{for(const f of fs.readdirSync(path.join(__dirname,'../database/postgres/migrations')).filter(f=>/^\d+.*\.sql$/.test(f)).sort())await c.query(fs.readFileSync(path.join(__dirname,'../database/postgres/migrations',f),'utf8'));}finally{c.release();}
+  const production=new ProductionService();production.pool=pool;const finance=new FinanceService();finance.pool=pool;
+  const actor=randomUUID(),job=randomUUID();await pool.query(`INSERT INTO users(id,username,password_hash,display_name) VALUES($1,'mfg-test','test','Test')`,[actor]);await pool.query(`INSERT INTO roles(code,name) VALUES('system_admin','System Admin') ON CONFLICT DO NOTHING`);await pool.query(`INSERT INTO user_roles SELECT $1,id FROM roles WHERE code='system_admin'`,[actor]);
+  await pool.query(`INSERT INTO production_orders(id,order_no,job_name,production_mode,product_code,product_name,planned_quantity,production_date) VALUES($1,'JO-MFG','Manufacturing','stock','P','Product',2,'2026-01-10')`,[job]);
+  const worker={id:randomUUID(),code:'W-1',nameAr:'Same name'};await production.addWorker(worker,actor);assert.equal((await production.addWorker(worker,actor)).id,worker.id);await assert.rejects(production.addWorker({...worker,id:randomUUID(),code:'w-1'},actor));await production.addWorker({...worker,id:randomUUID(),code:'W-2'},actor);
+  const command=(action,extra={})=>({operationId:randomUUID(),action,workDate:'2026-01-15',...extra});await production.execute(job,command('start',{costFocused:true}),actor);
+  const cut=command('work_cost',{costStage:'cutting',costBasis:'minute',machineName:'CUT-1',quantity:1.2345,rate:10,documentReference:'SESSION-CUT'});assert.equal((await production.execute(job,cut,actor)).amount,'12.3450');assert.equal((await production.execute(job,cut,actor)).alreadyPosted,true);
+  const competing=await Promise.allSettled([production.execute(job,command('work_cost',{...cut,operationId:randomUUID(),documentReference:'UNIQUE-SESSION'}),actor),production.execute(job,command('work_cost',{...cut,operationId:randomUUID(),documentReference:'unique-session'}),actor)]);assert.equal(competing.filter(r=>r.status==='fulfilled').length,1);
+  const wage=await production.execute(job,command('work_cost',{costStage:'assembly',costBasis:'hour',workerId:worker.id,quantity:2.5,rate:20,documentReference:'WORKER-JOB-1'}),actor);assert.equal(wage.amount,'50.0000');
+  await assert.rejects(production.execute(job,command('work_cost',{costStage:'general_labor',costBasis:'daily',workerId:worker.id,quantity:1,rate:7.5,documentReference:'WORKER-JOB-1',notes:'Other work'}),actor));
+  await production.execute(job,command('work_cost',{costStage:'general_labor',costBasis:'daily',workerId:worker.id,quantity:1,rate:7.5,documentReference:'GENERAL-WORK-1',notes:'Other work'}),actor);
+  await production.execute(job,command('packaging_cost',{amount:5}),actor);await production.execute(job,command('quality_check',{quantity:2,decision:'accepted'}),actor);
+  const d=await production.detail(job,'2026-01');assert.equal(d.order.status,'ready_for_costing');assert.equal(d.costs.reduce((s,c)=>s+Number(c.amount),0),87.19);assert.equal(Number(d.stages.find(s=>s.code==='cutting').completedQuantity),0);
+  let report=await finance.report(actor);assert.equal(report.manufacturing.find(r=>r.job_id===job).direct_manufacturing,'87.1900');assert.equal(report.wages.find(w=>w.id===wage.workCostId).source_type,'job_work');
+  const payable={operationId:randomUUID(),kind:'wage_payable',reference:'PAYABLE-W-1',date:'2026-01-15',sourceType:'job_work',sourceIds:[wage.workCostId]};await finance.execute(payable,actor);await finance.execute(payable,actor);await assert.rejects(finance.execute({...payable,operationId:randomUUID(),reference:'PAYABLE-W-2'},actor));
+  report=await finance.report(actor);assert.equal(report.manufacturing.find(r=>r.job_id===job).direct_manufacturing,'87.1900');assert.ok(!report.wages.some(w=>w.id===wage.workCostId));
+  await pool.query(`UPDATE accounting_periods SET status='closed' WHERE month='2026-01-01'`);await assert.rejects(production.execute(job,command('work_cost',{...cut,operationId:randomUUID(),documentReference:'CLOSED'}),actor));
+ }finally{if(pool)await pool.end();await admin.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);await admin.end();}
+});

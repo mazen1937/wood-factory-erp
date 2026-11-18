@@ -34,7 +34,7 @@
             <Button x:Name="InventoryButton" Content="المخزون" HorizontalAlignment="Stretch" Click="ShowInventoryAsync" />
             <Button x:Name="OrdersButton" Content="الطلبات والملف الفني" HorizontalAlignment="Stretch" Click="ShowOrdersAsync" />
             <Button Content="الإنتاج / تحت الإنتاج" HorizontalAlignment="Stretch" Click="ShowProductionAsync" />
-            <Button Content="المبيعات والمالية" HorizontalAlignment="Stretch" Click="ShowFinanceAsync" />
+            <Button Content="البيع والحسابات" HorizontalAlignment="Stretch" Click="ShowFinanceAsync" />
             <Button x:Name="AdminButton" Content="إدارة النظام" HorizontalAlignment="Stretch" />
             <Button Click="SignOut" Content="تسجيل الخروج" HorizontalAlignment="Stretch" />
           </StackPanel>

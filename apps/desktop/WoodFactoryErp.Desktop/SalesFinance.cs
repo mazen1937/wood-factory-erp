@@ -35,7 +35,7 @@ public partial class MainWindow
     {
         ["sale"]="بيع منتج تام",["sales_return"]="مرتجع / إلغاء بيع",["invoice"]="فاتورة داخلية مجمعة",["delivery"]="تسليم جزئي",
         ["customer_receipt"]="تحصيل / مقدم عميل",["supplier_payment"]="سداد مورد / عامل",["expense"]="إثبات مصروف آجل",["supplier_invoice"]="فاتورة مورد من استلام سابق",
-        ["purchase_fg"]="شراء منتج تام",["wage_payable"]="إثبات أجر مستحق للسداد",["allocation"]="تخصيص دفعة لدين",["transfer"]="تحويل بين حسابين",
+        ["production_completion"]="استلام إنتاج تام",["selling_price"]="حفظ سعر البيع",["purchase_fg"]="شراء منتج تام",["wage_payable"]="إثبات أجر مستحق للسداد",["allocation"]="تخصيص دفعة لدين",["transfer"]="تحويل بين حسابين",
         ["opening_treasury"]="رصيد خزينة افتتاحي معتمد",["customer_refund"]="رد رصيد عميل",["reversal"]="عكس مستند بسبب معتمد"
     };
     private void HideFinance(){if(financePanel is not null)financePanel.IsVisible=false;}
@@ -45,7 +45,7 @@ public partial class MainWindow
             if(financePanel is null)BuildFinance();
             financeOutbox??=new ProductionOutbox(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"WoodFactoryErp","finance.sqlite"));
             HideProductionExecution();HomePanel.IsVisible=OrdersPanel.IsVisible=InventoryPanel.IsVisible=MasterDataPanel.IsVisible=false;financePanel!.IsVisible=true;
-            await RefreshFinanceAsync();RestoreFinanceDrafts();await SyncFinanceAsync();
+            await LoadMonthlyFinanceAsync();await RefreshFinanceAsync();RestoreFinanceDrafts();RestoreGuidedSalesDraft();await SyncFinanceAsync();
             financeTimer??=new DispatcherTimer{Interval=TimeSpan.FromSeconds(10)};financeTimer.Tick-=FinanceTick;financeTimer.Tick+=FinanceTick;financeTimer.Start();
         }catch(Exception ex){if(financeStatus is not null)financeStatus.Text=FriendlyError(ex);}
     }
@@ -58,9 +58,9 @@ public partial class MainWindow
     private void BuildFinance()
     {
         financeRoot=new StackPanel{Spacing=12,Margin=new Thickness(10)};financePanel=new ScrollViewer{Content=financeRoot,IsVisible=false};((Grid)OrdersPanel.Parent!).Children.Add(financePanel);
-        financeRoot.Children.Add(ExecText("المبيعات والمالية",28));financeStatus=ExecText("");financeRoot.Children.Add(financeStatus);financeTotals=ExecText("",18);financeRoot.Children.Add(financeTotals);
+        financeRoot.Children.Add(ExecText("البيع والحسابات",28));financeStatus=ExecText("");financeRoot.Children.Add(financeStatus);financeTotals=ExecText("",18);financeRoot.Children.Add(new Expander{Header="أرصدة وإجماليات تراكمية — كل الفترات",Content=financeTotals});
         financeRoot.Children.Add(ExecText("العملة: جنيه مصري. كل مستند مستقل وله مرجع فريد. البيع يخصم المخزون ويسجل التكلفة مرة واحدة؛ الفاتورة والتحصيل لا يعيدان تسجيل البيع. المنتجات المقبولة بانتظار التكلفة غير متاحة للبيع."));
-        FinanceButton(financeRoot,"تحديث الأرصدة والمستندات",async m=>{await RefreshFinanceAsync();Notice(m,financeOnline?"تم التحديث من الخادم.":"تعذر الاتصال؛ المعروض آخر نسخة محفوظة وليست تأكيداً لأرصدة حالية.",financeOnline);});
+        FinanceButton(financeRoot,"تحديث الأرصدة والمستندات",async m=>{await RefreshFinanceAsync();await LoadMonthlyFinanceAsync();Notice(m,financeOnline?"تم التحديث من الخادم.":"تعذر الاتصال؛ المعروض آخر نسخة محفوظة وليست تأكيداً لأرصدة حالية.",financeOnline);});
         var tabs=new TabControl();financeRoot.Children.Add(tabs);var entries=new List<TabItem>();
         var sales=new StackPanel{Spacing=10};sales.Children.Add(ExecText("اختر منتجاً تاماً من البيانات الأساسية ومخزنه. سعر البيع والخصم إجمالي البند والضريبة المعتمدة منفصلون. رسوم التوصيل لا تدخل هامش المنتج."));
         AddFinanceForm(sales,"sale",true);financeStockTable=new StackPanel();sales.Children.Add(ExecText("المخزون المتاح وتكلفته الحالية",20));sales.Children.Add(financeStockTable);entries.Add(new(){Header="المبيعات",Content=sales});
@@ -78,9 +78,10 @@ public partial class MainWindow
         financeBalanceTable=new();reports.Children.Add(ExecText("الديون والدفعات والمقدمات",20));reports.Children.Add(financeBalanceTable);
         financeLineTable=new();reports.Children.Add(ExecText("بنود المبيعات ومراجعها والتكلفة الأصلية",20));reports.Children.Add(financeLineTable);
         financeSourceTable=new();reports.Children.Add(ExecText("مصادر مستحقة لم تربط بمستند مالي بعد",20));reports.Children.Add(financeSourceTable);entries.Add(new(){Header="الجداول والمراجعة",Content=reports});
+        reports.Children.Add(ExecText("المصاريف الصناعية حسب أمر الشغل والشهر (عرض تكلفة؛ دون خصم مكرر من الأرباح)",20));financeManufacturingTable=new();reports.Children.Add(financeManufacturingTable);
         var config=new StackPanel{Spacing=10};BuildFinanceConfig(config);entries.Add(new(){Header="إعدادات معتمدة",Content=config});
         var queue=new StackPanel{Spacing=10};queue.Children.Add(ExecText("الحفظ غير المؤكد يحتفظ بنفس المعرّف حتى بعد إعادة تشغيل البرنامج. طلب مرفوض يوقف الإرسال التالي إلى أن تراجعه. لا يلغي هذا مستنداً رسمياً."));financeQueueTable=new();queue.Children.Add(financeQueueTable);entries.Add(new(){Header="طلبات الحفظ",Content=queue});
-        tabs.ItemsSource=entries;
+        entries.Insert(0,BuildMonthlyFinanceTab());SimplifySalesFinance(tabs,entries);
         Closed+=(_,_)=>{financeTimer?.Stop();financeOutbox?.Dispose();};
     }
     private FinanceForm AddFinanceForm(StackPanel parent,string kind,bool hasLines=false)
@@ -118,6 +119,9 @@ public partial class MainWindow
         form.Party.Changed+=()=>{RefreshFinanceSources(form);form.Order.Set(Rows("orders").Where(o=>J(o,"customer_id")==form.Party.Value).Select(o=>new ExecChoice(J(o,"id"),J(o,"order_no")+" — "+J(o,"product_name"))));return Task.CompletedTask;};
         foreach(var input in FinanceInputs(form))input.TextChanged+=(_,_)=>SaveFinanceDrafts();
         foreach(var picker in FinancePickers(form))picker.Changed+=()=>{SaveFinanceDrafts();return Task.CompletedTask;};
+        var border=(Border)panel.Parent!;parent.Children.Remove(border);
+        var section=new Expander{Header=FinanceLabels[kind],Content=border,IsExpanded=!parent.Children.OfType<Expander>().Any()};
+        section.PropertyChanged+=(_,e)=>{if(e.Property==Expander.IsExpandedProperty&&section.IsExpanded)foreach(var other in parent.Children.OfType<Expander>().Where(x=>x!=section))other.IsExpanded=false;};parent.Children.Add(section);
         return form;
     }
     private void AddFinanceCartLine(FinanceForm f)
@@ -184,7 +188,7 @@ public partial class MainWindow
         FinanceButton(tax,"اعتماد السياسة",m=>SubmitFinanceAsync("configuration",new(){["kind"]="tax",["code"]=Nonempty(taxCode.Text,"اكتب كود السياسة."),["rate"]=FinanceNumber(rate.Text),["name"]=Nonempty(basis.Text,"اكتب أساس اعتماد الضريبة."),["effectiveFrom"]=ValidDate(from.Text)},m));
         financeConfigInputs.AddRange([code,name,taxCode,rate,basis,from]);
     }
-    private async Task SubmitFinanceAsync(string endpoint,Dictionary<string,object?> data,TextBlock feedback)
+    private async Task<JsonElement?> SubmitFinanceAsync(string endpoint,Dictionary<string,object?> data,TextBlock feedback)
     {
         if(financeOutbox is null)throw new InvalidOperationException("افتح المالية وسجل الدخول أولاً.");var user=FinanceUser;
         var fingerprint=Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(endpoint+JsonSerializer.Serialize(data,JsonOptions))));
@@ -193,6 +197,7 @@ public partial class MainWindow
         if(string.IsNullOrWhiteSpace(accessToken)||FinanceUser!=user)throw new InvalidOperationException("تغير المستخدم؛ الطلب محفوظ للحساب الأصلي.");
         var cmd=financeOutbox.Command(user,id);
         Notice(feedback,cmd?.Status=="accepted"?"تم الحفظ رسمياً. راجع المستند والأثر في الجداول؛ لا تعد إدخال نفس الحدث بمرجع جديد.":cmd?.Status=="blocked"?"لم يحفظ: "+ExecutionError(cmd.Detail)+" راجع طلبات الحفظ قبل التصحيح.":"الحفظ غير مؤكد. الطلب محفوظ محلياً بنفس المعرّف وسيعاد إرساله؛ الأرصدة الرسمية لم تؤكد بعد.",cmd?.Status=="accepted");
+        if(cmd?.Status=="accepted"){using var ack=JsonDocument.Parse(cmd.Detail);return ack.RootElement.Clone();}return null;
     }
     private async Task SyncFinanceAsync()
     {
@@ -209,7 +214,7 @@ public partial class MainWindow
                     else{FinanceBackoff();break;}
                 }catch(Exception ex)when(ex is HttpRequestException or TaskCanceledException or JsonException){FinanceBackoff();break;}
             }
-            if(changed)await RefreshFinanceAsync();RenderFinanceQueue();
+            if(changed){await RefreshFinanceAsync();await LoadMonthlyFinanceAsync();}RenderFinanceQueue();
         }finally{financeSyncing=false;}
     }
     private void FinanceBackoff(){financeOnline=false;financeNextRetry=DateTime.UtcNow.AddSeconds(Math.Min(300,10*Math.Pow(2,Math.Min(5,financeFailures++))));}
@@ -239,7 +244,7 @@ public partial class MainWindow
         financeRestoring=false;
         financePrintDocument.Set(Rows("documents").Select(d=>new ExecChoice(J(d,"id"),J(d,"reference")+" — "+Label(J(d,"kind")))));
         financeStockRows=Rows("stock").Select(r=>new[]{J(r,"code"),J(r,"name_ar"),J(r,"warehouse"),J(r,"quantity"),J(r,"unit_cost")}).ToList();
-        RenderFinanceTables();RenderFinanceQueue();
+        RenderFinanceTables();RenderFinanceQueue();RefreshGuidedSalesContext();
     }
     private void RefreshFinanceSources(FinanceForm f)
     {
@@ -270,6 +275,7 @@ public partial class MainWindow
         FinanceTable(financeTreasuryTable,["الحساب","النوع","العملة","الرصيد"],Rows("accounts").Select(a=>new[]{J(a,"name_ar"),J(a,"account_type")=="cash"?"نقدية":"بنك",J(a,"currency"),J(a,"balance")}));
         var ledger=new StackPanel();financeTreasuryTable.Children.Add(ledger);FinanceTable(ledger,["التاريخ","الحساب","المستند","المرجع","داخل / خارج"],Rows("treasury").Select(m=>new[]{J(m,"posting_date").Split('T')[0],J(m,"name_ar"),Label(J(m,"kind")),J(m,"reference"),J(m,"amount")}));
         FinanceTable(financeLineTable,["المستند","الصنف","العدد","الوحدة","الصافي","الضريبة","التكلفة","المرتجع","المسلم"],Rows("lines").Where(r=>FinanceMatch(J(r,"reference"),J(r,"item_code"),J(r,"item_name"))).Select(r=>new[]{J(r,"reference"),J(r,"item_code")+" — "+J(r,"item_name"),J(r,"quantity"),J(r,"unit_code"),J(r,"net"),J(r,"tax"),J(r,"cogs"),J(r,"returned"),J(r,"delivered")}));
+        if(financeManufacturingTable is not null)FinanceTable(financeManufacturingTable,["الشهر","أمر الشغل","طلب العميل","الحالة","ماكينات وعمال","تعبئة","أجور سابقة","صناعي مباشر","أجور مجمعة"],Rows("manufacturing").Where(r=>FinanceMatch(J(r,"job_code"),J(r,"order_code"),J(r,"month"))).Select(r=>new[]{J(r,"month"),J(r,"job_code"),J(r,"order_code"),ExecutionStatus(J(r,"status")),J(r,"work_cost"),J(r,"packaging_cost"),J(r,"legacy_wages"),J(r,"direct_manufacturing"),J(r,"pooled_wages")}));
         FinanceTable(financeSourceTable,["نوع المصدر","المرجع / العامل","الطرف","المبلغ","التاريخ"],Rows("receipts").Select(r=>new[]{"استلام خامات",J(r,"document_reference"),PartyLabel(r),J(r,"amount"),J(r,"date")}).Concat(Rows("wages").Select(w=>new[]{"أجر إنتاج",J(w,"worker_name"),"عامل",J(w,"amount"),J(w,"date")})));
         var r=financeData.GetProperty("reconciliations");var labels=new Dictionary<string,string>{{"invalid_obligations","أرصدة الديون"},{"invalid_settlements","أرصدة الدفعات"},{"invalid_transfers","التحويلات"},{"invalid_sales","إجماليات البيع"},{"invalid_stock_quantities","كميات المخزون"},{"invalid_stock_values","قيم المخزون"}};
         financeReconciliation.Text="استثناءات المراجعة (المتوقع صفر): "+string.Join(" | ",r.EnumerateObject().Select(p=>labels.GetValueOrDefault(p.Name,"مراجعة إضافية")+": "+p.Value));
@@ -281,6 +287,7 @@ public partial class MainWindow
     private static ProductionPicker[] FinancePickers(FinanceForm f)=>[f.Party,f.Account,f.TargetAccount,f.Source,f.Item,f.Warehouse,f.Tax,f.OriginalLine,f.Order,f.Obligation,f.Settlement];
     private void SaveFinanceDrafts()
     {
+        SaveGuidedSalesDraft();
         if(financeRestoring||financeOutbox is null||string.IsNullOrWhiteSpace(accessToken)||financeDraftUser!=FinanceUser)return;
         var drafts=financeForms.Select(f=>new FinanceDraft(f.Kind,FinanceInputs(f).Select(i=>i.Text??"").ToArray(),FinancePickers(f).Select(p=>p.Value).ToArray(),f.Lines.ToList(),f.SaleIds.ToList(),f.Category.SelectedIndex,f.ReturnType.SelectedIndex)).ToList();
         financeOutbox.Cache("forms:"+FinanceUser,JsonSerializer.Serialize(drafts,JsonOptions));
@@ -294,7 +301,7 @@ public partial class MainWindow
     }
     private void ClearFinanceSession()
     {
-        SaveFinanceDrafts();financeDraftUser=null;financeRestoring=true;
+        ClearMonthlySession();financeManufacturingTable?.Children.Clear();SaveFinanceDrafts();ClearGuidedSalesSession();financeDraftUser=null;financeRestoring=true;
         try{foreach(var f in financeForms){foreach(var i in FinanceInputs(f))i.Text="";f.Date.Text=DateTime.Today.ToString("yyyy-MM-dd");f.Discount.Text=f.DeliveryCharge.Text="0";foreach(var p in FinancePickers(f))p.Set([]);f.Lines.Clear();f.SaleIds.Clear();f.CartPanel.Children.Clear();}financeData=default;financeStockRows.Clear();foreach(var i in financeConfigInputs)i.Text="";
             if(financePanel is not null){financeTotals.Text=financeStatus.Text=financeReconciliation.Text="";foreach(var table in new[]{financeDocumentTable,financeBalanceTable,financeTreasuryTable,financeSourceTable,financeLineTable,financeQueueTable,financeStockTable})table.Children.Clear();financePrintDocument.Set([]);}
         }
@@ -335,7 +342,7 @@ public partial class MainWindow
         var file=await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions{Title="حفظ مستند داخلي",SuggestedFileName="Finance_"+J(d,"serial")+".pdf",FileTypeChoices=[new FilePickerFileType("PDF"){Patterns=["*.pdf"]}]});if(file is null)return;
         await using var stream=await file.OpenWriteAsync();await stream.WriteAsync(bytes);Notice(message,"تم حفظ المستند الداخلي PDF.",true);
     }
-    private static string InventoryMovementLabel(string? kind)=>kind switch{"production_issue"=>"صرف للإنتاج","production_return"=>"رد من الإنتاج","sale_issue"=>"صرف بيع","sales_return"=>"مرتجع بيع","finished_purchase"=>"استلام منتج تام مشترى","receipt"=>"استلام خامات",_=>kind??"حركة"};
+    private static string InventoryMovementLabel(string? kind)=>kind switch{"production_issue"=>"صرف للإنتاج","production_return"=>"رد من الإنتاج","sale_issue"=>"صرف بيع","sales_return"=>"مرتجع بيع","production_completion"=>"استلام من الإنتاج","finished_purchase"=>"استلام منتج تام مشترى","receipt"=>"استلام خامات",_=>kind??"حركة"};
     private sealed record FinanceCartLine(string Key,string Label,Dictionary<string,object?> Values);
     private sealed record FinanceDraft(string Kind,string[] Text,string?[] Choices,List<FinanceCartLine> Lines,List<string> SaleIds,int Category,int ReturnType);
     private sealed class FinanceForm(string kind,StackPanel panel)

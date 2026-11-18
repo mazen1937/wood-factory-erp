@@ -6,6 +6,7 @@ const {plainToInstance}=require('../apps/api/node_modules/class-transformer');
 const {validate}=require('../apps/api/node_modules/class-validator');
 const {FinanceService}=require('../apps/api/dist/finance/finance.service');
 const {FinanceCommandDto}=require('../apps/api/dist/finance/finance.dto');
+const {JOB_POOL_SQL}=require('../apps/api/dist/finance/finished-goods');
 const {units,decimal,multiply,prorate,percentage,rounded,SCALE,canonical}=require('../apps/api/dist/finance/decimal');
 const actor=randomUUID(),party=randomUUID(),item=randomUUID(),warehouse=randomUUID(),account=randomUUID(),sourceId=randomUUID(),sourceLine=randomUUID(),obligation=randomUUID(),settlement=randomUUID();
 const rows=(...rows)=>({rows,rowCount:rows.length});
@@ -16,6 +17,12 @@ function harness(o={}){
  const client={async query(sql,values=[]){calls.push({sql,values});
   if(sql.includes('SELECT u.id'))return o.denied?rows():rows({id:actor});
   if(sql.includes('SELECT payload_hash,result'))return o.prior?rows(o.prior):rows();
+  if(sql.includes('SELECT p.*,o.customer_id'))return rows({id:'job',status:o.jobStatus??'ready_for_costing',planned_quantity:'2.0000',customer_order_id:o.completionOrder??null,customer_id:o.completionOrder?party:null,customer_status:'open'});
+  if(sql.includes("status='pending_costing'"))return rows({quantity:o.accepted??'2.0000',latest:'2026-11-01'});
+  if(sql.includes('SELECT id FROM production_wage_agreements'))return o.pendingWage?rows({id:'pending'}):rows();
+  if(sql.includes('p.quantity<>m.quantity'))return rows({invalid:!!o.sourceMismatch});
+  if(sql===JOB_POOL_SQL)return rows({amount:o.sharedPool??'0.0000'});
+  if(sql.includes('jsonb_agg(jsonb_build_object'))return rows({total:o.productionCost??'2000.0000',latest:'2026-11-01',snapshot:[{id:'source',amount:'2000.0000'}]});
   if(sql.includes('CURRENT_DATE AS valid'))return rows({valid:!o.future});
   if(sql.includes('SELECT status FROM accounting_periods'))return rows({status:o.closed?'closed':'open'});
   if(sql.includes('SELECT id FROM parties'))return o.badParty?rows():rows({id:party});
@@ -43,12 +50,25 @@ function harness(o={}){
   if(sql.includes('FROM finance_obligation_balances WHERE id='))return rows({id:obligation,outstanding:o.outstanding??'6000.0000',side:o.wrongSide?'ap':'ar',party_id:o.wrongAllocationParty?randomUUID():party,worker_name:null,posting_date:'2026-11-01'});
   if(sql.includes('FROM finance_documents WHERE source_id='))return rows();
   if(sql.includes('SELECT total_cost::text AS amount'))return rows({amount:'10000.0000',date:'2026-11-01'});
+  if(sql.includes('worker_snapshot AS worker_name'))return rows({amount:'12.3456',worker_name:'W-1 — Worker',date:'2026-11-01'});
   if(sql.includes('SELECT a.amount::text'))return rows({amount:'240.0000',worker_name:'عامل',date:'2026-11-01'});
   return rows();
  },release(){released=true;}};
  svc.pool={connect:async()=>client};return {svc,calls,released:()=>released};
 }
 function rollback(h){assert.equal(h.calls.at(-1).sql,'ROLLBACK');assert.ok(!h.calls.some(c=>c.sql==='COMMIT'));assert.ok(h.released());}
+
+test('accepted full-batch production moves actual cost into finished stock once without a new expense or payable',async()=>{
+ const h=harness();const result=await h.svc.execute(command('production_completion',{partyId:undefined,productionOrderId:sourceId,costApproved:true,lines:[line({quantity:'2',unitPrice:undefined,discount:undefined,taxPolicyId:undefined})]}),actor);
+ assert.equal(result.total,'2000.0000');assert.equal(result.cogs,'0.0000');assert.equal(h.calls.filter(c=>c.sql.includes('INSERT INTO production_completions')).length,1);assert.ok(h.calls.some(c=>c.sql.includes('INSERT INTO inventory_movements')&&c.values[1]==='production_completion'));assert.ok(!h.calls.some(c=>c.sql.includes('INSERT INTO production_cost_entries')||c.sql.includes('INSERT INTO finance_obligations')));assert.equal(h.calls.at(-1).sql,'COMMIT');
+});
+for(const option of [{jobStatus:'completed'},{accepted:'1.0000'},{pendingWage:true},{sharedPool:'100.0000'},{productionCost:'0.0000'},{sourceMismatch:true}])test('production completion blocks invalid/uncosted or unreconciled batches '+JSON.stringify(option),async()=>{
+ const h=harness(option);await assert.rejects(h.svc.execute(command('production_completion',{partyId:undefined,productionOrderId:sourceId,costApproved:true,lines:[line({quantity:'2'})]}),actor));rollback(h);
+});
+test('sale and immediate delivery post together with one stock issue and no automatic cash collection',async()=>{
+ const h=harness();const result=await h.svc.execute(command('sale_and_delivery',{lines:[line()]}),actor);assert.equal(result.deliveredNow,true);assert.equal(result.kind,'sale');assert.equal(h.calls.filter(c=>c.sql.includes('INSERT INTO inventory_movements')).length,1);assert.equal(h.calls.filter(c=>c.sql.includes('INSERT INTO finance_deliveries')).length,1);assert.ok(!h.calls.some(c=>c.sql.includes('INSERT INTO finance_treasury_movements')));
+});
+test('sale-and-delivery rejects an explicitly contradictory delivery flag before any mutation',async()=>{const h=harness();await assert.rejects(h.svc.execute(command('sale_and_delivery',{deliverNow:false,lines:[line()]}),actor));assert.equal(h.calls.length,0);});
 test('financial API refuses binary floats, exponent notation, thousands separators and excessive precision',()=>{for(const value of [0.1,NaN,Infinity,'1e2','1,000','1.00001','-1',' 1','9999999999999'])assert.throws(()=>units(value));});
 test('decimal calculations are exact for 0.1 and large values beyond Number safe integer cents',()=>{assert.equal(decimal(multiply(units('0.1'),units('0.2'))),'0.0200');assert.equal(decimal(units('999999999999.9999')+units('0.0001')),'1000000000000.0000');});
 test('contract sale example: net 2700, COGS 2000, profit 700, margin 25.9259 excluding tax',()=>{const net=units('3000')-units('300'),profit=net-units('2000');assert.equal(decimal(profit),'700.0000');assert.equal(decimal(rounded(profit*100n*SCALE,net)),'25.9259');assert.equal(decimal(percentage(net,units('14'))),'378.0000');});
@@ -89,3 +109,5 @@ test('return of a paid sale releases excess allocation as reusable customer cred
 test('customer refund cannot exceed unused advance balance',async()=>{const h=harness({sourceKind:'customer_receipt',available:'100.0000'});await assert.rejects(h.svc.execute(command('customer_refund',{sourceId,accountId:account,amount:'101'}),actor));rollback(h);});
 test('post-write reconciliation failure rolls the complete transaction back',async()=>{const h=harness({invalid:true});await assert.rejects(h.svc.execute(command('customer_receipt',{accountId:account,amount:'2000'}),actor));rollback(h);});
 test('DTO rejects numeric money and malformed identifiers before business posting',async()=>{const bad=plainToInstance(FinanceCommandDto,{...command('customer_receipt'),amount:2000});assert.ok((await validate(bad)).some(e=>e.property==='amount'));const valid=plainToInstance(FinanceCommandDto,command('sale',{lines:[line()]}));assert.equal((await validate(valid)).length,0);});
+
+test('job worker payable uses the linked cost source without a second manufacturing charge',async()=>{const h=harness();const r=await h.svc.execute(command('wage_payable',{partyId:undefined,sourceType:'job_work',sourceIds:[sourceId]}),actor);assert.equal(r.total,'12.3456');assert.ok(h.calls.some(c=>c.sql.includes('INSERT INTO finance_source_links')&&c.values[0]==='job_work'));assert.ok(!h.calls.some(c=>c.sql.includes('INSERT INTO production_cost_entries')));});

@@ -1,7 +1,8 @@
+import {enterWorkCost} from './manufacturing-costs';
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { createHash } from 'node:crypto';
 import { Pool, PoolClient } from 'pg';
-import { ExecutionCommandDto, LaborRateDto } from './production.dto';
+import { ExecutionCommandDto, LaborRateDto, WorkerDto } from './production.dto';
 
 export function canonical(value: any): string {
   if (Array.isArray(value)) return '[' + value.map(canonical).join(',') + ']';
@@ -17,6 +18,13 @@ export class ProductionService {
       JOIN roles r ON r.id=ur.role_id WHERE u.id=$1 AND u.active=true`,[userId]);
     const allowed=configure ? ['system_admin','production_manager'] : ['system_admin','production_manager','production_operator'];
     if (!result.rows.some(r=>allowed.includes(r.code))) throw new ForbiddenException('ليست لديك صلاحية الإنتاج.');
+  }
+  async workers(){return (await this.pool.query('SELECT id,code,name_ar AS "nameAr",name_en AS "nameEn" FROM production_workers WHERE active ORDER BY code')).rows;}
+  async addWorker(b:WorkerDto,user:string){
+    if(!b.code.trim()||!b.nameAr.trim())throw new BadRequestException('Worker code and name are required.');
+    try{const r=await this.pool.query(`INSERT INTO production_workers(id,code,name_ar,name_en,created_by) VALUES($1,$2,$3,$4,$5)
+      ON CONFLICT(id) DO UPDATE SET id=production_workers.id WHERE production_workers.code=EXCLUDED.code AND production_workers.name_ar=EXCLUDED.name_ar AND production_workers.name_en IS NOT DISTINCT FROM EXCLUDED.name_en
+      RETURNING id,code,name_ar AS "nameAr",name_en AS "nameEn"`,[b.id,b.code.trim(),b.nameAr.trim(),b.nameEn?.trim()||null,user]);if(!r.rowCount)throw new ConflictException('Worker ID already has different data.');return r.rows[0];}catch(e){this.translate(e);}
   }
   async catalog() { return (await this.pool.query('SELECT code,name_ar AS "nameAr",sequence FROM production_operation_catalog WHERE active=true ORDER BY sequence')).rows; }
   async rates() { return (await this.pool.query(`SELECT id,code,name_ar AS "nameAr",stage_code AS "stageCode",rate::text,treatment,
@@ -53,9 +61,10 @@ export class ProductionService {
       this.pool.query(`SELECT quantity::text,accepted_date::text AS date,status FROM production_acceptances WHERE production_order_id=$1 ORDER BY accepted_date,id`,[id]),
       this.pool.query(`WITH bounds AS (SELECT COALESCE($2::date,date_trunc('month',CURRENT_DATE)::date) AS start)
         SELECT to_char(b.start,'YYYY-MM') AS month,
-        COALESCE(SUM(c.amount) FILTER(WHERE c.treatment='direct' AND c.posting_date<b.start),0)::text AS "openingDirectCost",
+        (COALESCE(SUM(c.amount) FILTER(WHERE c.treatment='direct' AND c.posting_date<b.start),0)-COALESCE((SELECT SUM(cost) FROM production_completions pc WHERE pc.production_order_id=$1 AND pc.posting_date<b.start),0))::text AS "openingDirectCost",
         COALESCE(SUM(c.amount) FILTER(WHERE c.treatment='direct' AND c.posting_date>=b.start AND c.posting_date<(b.start+interval '1 month')),0)::text AS "currentDirectCost",
-        COALESCE(SUM(c.amount) FILTER(WHERE c.treatment='direct' AND c.posting_date<(b.start+interval '1 month')),0)::text AS "closingDirectCost",
+        (COALESCE(SUM(c.amount) FILTER(WHERE c.treatment='direct' AND c.posting_date<(b.start+interval '1 month')),0)-COALESCE((SELECT SUM(cost) FROM production_completions pc WHERE pc.production_order_id=$1 AND pc.posting_date<(b.start+interval '1 month')),0))::text AS "closingDirectCost",
+        COALESCE((SELECT SUM(cost) FROM production_completions pc WHERE pc.production_order_id=$1 AND pc.posting_date>=b.start AND pc.posting_date<(b.start+interval '1 month')),0)::text AS "transferredDirectCost",
         COALESCE(SUM(c.amount) FILTER(WHERE c.treatment='pooled' AND c.posting_date>=b.start AND c.posting_date<(b.start+interval '1 month')),0)::text AS "pooledWages"
         FROM bounds b LEFT JOIN production_cost_entries c ON c.production_order_id=$1 GROUP BY b.start`,[id,month?month+'-01':null]),
       this.pool.query(`SELECT w.quantity::text,w.reason,w.observation_date::text AS date,i.code AS "itemCode"
@@ -71,7 +80,8 @@ export class ProductionService {
         WHERE q.production_order_id=$1 ORDER BY q.inspection_date,q.id`,[id]),
       this.pool.query(`SELECT amount::text,posting_date::text AS date,description FROM production_packaging_costs WHERE production_order_id=$1`,[id])
     ]);
-    return {order:order.rows[0],stages:stages.rows,materials:materials.rows,labor:labor.rows,costs:costs.rows,events:events.rows,acceptances:acceptances.rows,wip:wip.rows[0],waste:waste.rows,wages:wages.rows,quality:quality.rows,packaging:packaging.rows};
+    const workCosts=(await this.pool.query(`SELECT id,stage_code AS "stageCode",worker_id AS "workerId",worker_snapshot AS "workerName",machine_name AS "machineName",basis,quantity::text,rate::text,amount::text,reference,posting_date::text AS date,description FROM production_work_costs WHERE production_order_id=$1 ORDER BY posting_date,id`,[id])).rows;
+    return {workCosts,order:order.rows[0],stages:stages.rows,materials:materials.rows,labor:labor.rows,costs:costs.rows,events:events.rows,acceptances:acceptances.rows,wip:wip.rows[0],waste:waste.rows,wages:wages.rows,quality:quality.rows,packaging:packaging.rows};
   }
 
   async addRate(body:LaborRateDto,userId:string) {
@@ -134,22 +144,33 @@ export class ProductionService {
           const source=await client.query('SELECT status FROM customer_orders WHERE id=$1 FOR SHARE',[order.customer_order_id]);
           if(source.rows[0]?.status!=='open') throw new ConflictException('طلب العميل ملغي أو غير متاح.');
         }
-        const route=[...new Set([...(body.stages??[]),'quality_control'])];
-        if(!body.stages?.length) throw new BadRequestException('اختر مراحل الإنتاج المناسبة للمنتج.');
+        const route=[...new Set([...(body.costFocused?['cutting','ashareet','assembly','packaging']:body.stages??[]),'quality_control'])];
+        if(!body.costFocused&&!body.stages?.length) throw new BadRequestException('اختر مراحل الإنتاج المناسبة للمنتج.');
         const catalog=await client.query('SELECT * FROM production_operation_catalog WHERE code=ANY($1::text[]) AND active=true ORDER BY sequence',[route]);
         if(catalog.rowCount!==route.length) throw new BadRequestException('إحدى المراحل غير متاحة.');
         for(const stage of catalog.rows) await client.query(`INSERT INTO production_operations(production_order_id,operation_code,name_ar,sequence) VALUES($1,$2,$3,$4)`,[id,stage.code,stage.name_ar,stage.sequence]);
         await client.query(`UPDATE production_orders SET status='in_progress',execution_started_date=$2::date WHERE id=$1`,[id,body.workDate]);
+        if(body.costFocused)await client.query('UPDATE production_orders SET cost_focused=true WHERE id=$1',[id]);
       } else if(body.action==='hold'||body.action==='resume') {
         if(!body.notes?.trim()) throw new BadRequestException('سجل سبب الإيقاف / الاستئناف.');
         if((body.action==='hold'&&order.status!=='in_progress')||(body.action==='resume'&&order.status!=='on_hold')) throw new ConflictException('حالة الأمر لا تسمح بهذه الحركة.');
         await client.query('UPDATE production_orders SET status=$2 WHERE id=$1',[id,body.action==='hold'?'on_hold':'in_progress']);
       } else {
-        const allowed=['return','waste','labor','consumable','packaging_cost','wage_agreement','wage_due'].includes(body.action)
+        const allowed=['cost_mode','work_cost','return','waste','labor','consumable','packaging_cost','wage_agreement','wage_due'].includes(body.action)
           ? ['in_progress','on_hold','ready_for_costing'] : ['in_progress'];
         if(body.action==='quality_check') allowed.push('on_hold');
         if(!allowed.includes(order.status)) throw new ConflictException('ابدأ أو استأنف الإنتاج قبل تسجيل هذه الحركة.');
-        if(body.action==='progress') result={...result,...await this.progress(client,id,body)};
+        if(order.cost_focused&&['progress','labor','wage_agreement'].includes(body.action))throw new ConflictException('استخدم أقسام مصاريف التصنيع بدلاً من تسجيل إنجاز المراحل.');
+        if(body.action==='cost_mode'){
+          const pending=await client.query("SELECT id FROM production_wage_agreements WHERE production_order_id=$1 AND ((basis='unit' AND accrued_quantity<assigned_quantity) OR (basis<>'unit' AND accrued_quantity=0))",[id]);
+          if(pending.rowCount)throw new ConflictException('توجد اتفاقات أجور سابقة لم تتم تسويتها؛ يجب مراجعتها قبل تحويل طريقة العمل لمنع فقدها أو حسابها مرتين.');
+          await client.query('UPDATE production_orders SET cost_focused=true WHERE id=$1',[id]);
+        }
+        else if(body.action==='work_cost'){
+          if(!order.cost_focused)throw new ConflictException('فعّل تسجيل المصاريف لهذا الأمر أولاً.');
+          result={...result,...await enterWorkCost(client,id,body,userId)};
+        }
+        else if(body.action==='progress') result={...result,...await this.progress(client,id,body)};
         else if(body.action==='issue'||body.action==='return') result={...result,...await this.material(client,id,body,userId)};
         else if(body.action==='labor') result={...result,...await this.labor(client,id,body)};
         else if(body.action==='waste') result={...result,...await this.waste(client,id,body)};
@@ -205,6 +226,9 @@ export class ProductionService {
     const warehouse=await client.query(`SELECT id FROM warehouses WHERE id=$1 AND active=true AND warehouse_type='raw_material' FOR SHARE`,[warehouseId??null]);
     if(!item.rowCount||!warehouse.rowCount) throw new BadRequestException('اختر خامة مخزنية ومخزن خامات نشطين.');
     const costs=await client.query('SELECT * FROM inventory_item_costs WHERE item_id=$1 FOR UPDATE',[itemId]);
+    const precision=await client.query(`SELECT $1::numeric=ROUND($1::numeric,u.precision_digits) AS valid
+      FROM items i JOIN units_of_measure u ON u.id=i.base_unit_id WHERE i.id=$2`,[quantity,itemId]);
+    if(!precision.rows[0]?.valid)throw new BadRequestException('كمية الصرف أو الرد لا تطابق دقة وحدة قياس الصنف.');
     if(!costs.rowCount) throw new ConflictException('لا يوجد رصيد تكلفة للصنف.');
     await client.query(`INSERT INTO inventory_balances(item_id,warehouse_id) VALUES($1,$2) ON CONFLICT DO NOTHING`,[itemId,warehouseId]);
     const balance=await client.query('SELECT quantity_on_hand FROM inventory_balances WHERE item_id=$1 AND warehouse_id=$2 FOR UPDATE',[itemId,warehouseId]);
@@ -378,8 +402,8 @@ export class ProductionService {
       SELECT COALESCE(SUM(quantity) FILTER(WHERE decision='rejected'),0)-COALESCE(SUM(quantity) FILTER(WHERE reinspection),0) AS rejected
       FROM production_quality_checks WHERE production_order_id=$1)
       SELECT CASE WHEN $3::boolean THEN rejected >= $2::numeric ELSE
-        COALESCE((SELECT completed_quantity FROM production_operations WHERE production_order_id=$1 AND NOT retired_from_route AND operation_code<>'quality_control' ORDER BY sequence DESC LIMIT 1),
-          (SELECT planned_quantity FROM production_orders WHERE id=$1))
+        CASE WHEN (SELECT cost_focused FROM production_orders WHERE id=$1) THEN (SELECT planned_quantity FROM production_orders WHERE id=$1) ELSE COALESCE((SELECT completed_quantity FROM production_operations WHERE production_order_id=$1 AND NOT retired_from_route AND operation_code<>'quality_control' ORDER BY sequence DESC LIMIT 1),
+          (SELECT planned_quantity FROM production_orders WHERE id=$1)) END
         -COALESCE((SELECT SUM(quantity) FROM production_acceptances WHERE production_order_id=$1),0)-rejected >= $2::numeric END AS valid FROM inspected`,[id,quantity,body.reinspection??false]);
     if(!available.rows[0].valid) throw new ConflictException(body.reinspection?'الكمية تتجاوز المرفوض المنتظر إعادة الفحص.':'الكمية تتجاوز الجاهز للفحص الذي لم يُقبل أو يُرفض بعد.');
     const check=await client.query(`INSERT INTO production_quality_checks(production_order_id,operation_id,quantity,decision,reinspection,reason,inspection_date)

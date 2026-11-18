@@ -16,7 +16,7 @@ function harness(options={}) {
   const client={async query(sql,values=[]) {
     calls.push({sql,values});
     if(sql.includes('SELECT payload_hash,result'))return options.prior?rows(options.prior):rows();
-    if(sql.includes('SELECT * FROM production_orders'))return rows({id:'job',status:options.status??'in_progress',execution_started_date:'2026-11-01',planned_quantity:'10',customer_order_id:options.customerId});
+    if(sql.includes('SELECT * FROM production_orders'))return rows({id:'job',status:options.status??'in_progress',execution_started_date:'2026-11-01',planned_quantity:'10',cost_focused:options.costFocused??false,customer_order_id:options.customerId});
     if(sql.includes('SELECT status FROM customer_orders'))return rows({status:options.sourceStatus??'open'});
     if(sql.includes('AS after_start'))return rows({valid:options.validDate??true,after_start:true});
     if(sql.includes('SELECT status FROM accounting_periods'))return rows({status:options.closed?'closed':'open'});
@@ -26,8 +26,12 @@ function harness(options={}) {
     if(sql.includes('UPDATE production_operations op'))return options.excessProgress?rows():rows({completedQuantity:'6'});
     if(sql.includes('SELECT m.id FROM production_material_postings'))return options.excessWaste?rows():rows({id:'original'});
     if(sql.includes('FROM production_material_postings m WHERE'))return rows({id:'original',item_id:'item',warehouse_id:'warehouse',stage_id:stageId,quantity:'4',amount:'400',unit_cost:'100',returned:'1',returned_amount:'100',posting_date:'2026-11-10'});
+    if(sql.includes('SELECT id,code,name_ar FROM production_workers'))return options.badWorker?rows():rows({id:'worker',code:'W-1',name_ar:'Worker'});
+    if(sql.includes('SELECT a.id FROM production_wage_agreements'))return options.legacyWork?rows({id:'old'}):rows();
+    if(sql.includes('INSERT INTO production_work_costs'))return rows({id:'work-cost',amount:'12.3456'});
     if(sql.includes('SELECT id FROM items'))return options.badItem?rows():rows({id:'item'});
     if(sql.includes('SELECT id FROM warehouses'))return rows({id:'warehouse'});
+    if(sql.includes('ROUND($1::numeric,u.precision_digits)'))return rows({valid:!options.badPrecision});
     if(sql.includes('SELECT * FROM inventory_item_costs'))return rows({quantity_on_hand:'20',inventory_value:'3000',average_unit_cost:'150'});
     if(sql.includes('SELECT quantity_on_hand FROM inventory_balances'))return rows({quantity_on_hand:'20'});
     if(sql.includes(' AS enough,'))return rows({enough:!options.insufficient,amount:options.amount??'300'});
@@ -61,6 +65,38 @@ function harness(options={}) {
   return {service,calls,released:()=>released};
 }
 function rollback(h) {assert.equal(h.calls.at(-1).sql,'ROLLBACK');assert.ok(!h.calls.some(x=>x.sql==='COMMIT'));assert.ok(h.released());}
+
+const workCommand=(extra={})=>({...command('work_cost'),costStage:'cutting',costBasis:'minute',machineName:'CUT-1',quantity:1.2345,rate:10,documentReference:'SESSION-1',...extra});
+test('cost-focused start selects cost sections without requiring phase selection',async()=>{
+ const h=harness({status:'draft'});await h.service.execute('job',{...command('start'),costFocused:true},actor);
+ assert.ok(h.calls.some(c=>c.sql.includes('SET cost_focused=true')));assert.equal(h.calls.at(-1).sql,'COMMIT');
+});
+test('machine cost posts one exact server-calculated source and one direct costing entry',async()=>{
+ const h=harness({costFocused:true});const r=await h.service.execute('job',workCommand(),actor);assert.equal(r.amount,'12.3456');
+ const source=h.calls.find(c=>c.sql.includes('INSERT INTO production_work_costs'));assert.equal(source.values[7],'1.2345');assert.equal(source.values[8],'10');
+ assert.equal(h.calls.filter(c=>c.sql.includes('INSERT INTO production_cost_entries')).length,1);assert.ok(!h.calls.some(c=>c.sql.includes('INSERT INTO inventory_')||c.sql.includes('INSERT INTO finance_')));
+});
+test('worker costs snapshot unique worker code and link UUID without progress registration',async()=>{
+ const h=harness({costFocused:true});await h.service.execute('job',workCommand({costStage:'assembly',machineName:undefined,workerId:stageId,costBasis:'monthly'}),actor);
+ const source=h.calls.find(c=>c.sql.includes('INSERT INTO production_work_costs'));assert.equal(source.values[3],stageId);assert.equal(source.values[4],'W-1 — Worker');assert.equal(source.values[5],null);
+});
+test('general worker wage records arbitrary described work using the same costing source',async()=>{
+ const h=harness({costFocused:true});await h.service.execute('job',workCommand({costStage:'general_labor',machineName:undefined,workerId:stageId,costBasis:'daily',notes:'Equipment cleaning for this job'}),actor);
+ const row=h.calls.find(c=>c.sql.includes('INSERT INTO production_work_costs'));assert.equal(row.values[2],'general_labor');assert.equal(row.values[3],stageId);assert.equal(row.values[11],'Equipment cleaning for this job');
+ assert.equal(h.calls.filter(c=>c.sql.includes('INSERT INTO production_cost_entries')).length,1);
+});
+test('general wage requires a description of the work and a registered worker',async()=>{for(const extra of [{notes:' '},{workerId:undefined}]){const h=harness({costFocused:true});await assert.rejects(h.service.execute('job',workCommand({costStage:'general_labor',machineName:undefined,workerId:stageId,...extra}),actor));rollback(h);}});
+for(const [label,extra,options] of [
+ ['missing machine',{machineName:''},{}],['missing worker',{costStage:'assembly',machineName:undefined},{}],
+ ['inactive worker',{costStage:'assembly',machineName:undefined,workerId:stageId},{badWorker:true}],
+ ['machine monthly basis',{costBasis:'monthly'},{}],['missing reference',{documentReference:''},{}],['invalid rate',{rate:0},{}],
+ ['historical wage collision',{}, {legacyWork:true}],['unconverted job',{}, {costFocused:false}]
+])test(`manufacturing rejects ${label} atomically`,async()=>{const h=harness({costFocused:true,...options});await assert.rejects(h.service.execute('job',workCommand(extra),actor));rollback(h);});
+test('new cost workflow rejects old progress and agreement postings',async()=>{for(const action of ['progress','labor','wage_agreement']){const h=harness({costFocused:true});await assert.rejects(h.service.execute('job',command(action),actor));rollback(h);}});
+test('work cost ledger failure rolls back the source and event',async()=>{const h=harness({costFocused:true,failCost:true});await assert.rejects(h.service.execute('job',workCommand(),actor));rollback(h);assert.ok(!h.calls.some(c=>c.sql.includes('INSERT INTO production_execution_events')));});
+test('historical pending wages block workflow conversion rather than losing earned commitments',async()=>{const h=harness({wageOverlap:true});await assert.rejects(h.service.execute('job',command('cost_mode'),actor));rollback(h);});
+test('an on-hold job can convert to cost capture without losing its hold status',async()=>{const h=harness({status:'on_hold'});await h.service.execute('job',command('cost_mode'),actor);assert.ok(h.calls.some(c=>c.sql.includes('SET cost_focused=true')));assert.ok(!h.calls.some(c=>c.sql.includes('SET status=')));assert.equal(h.calls.at(-1).sql,'COMMIT');});
+test('identical manufacturing retry acknowledges the original source without reposting',async()=>{const body=workCommand(),hash=createHash('sha256').update(canonical({id:'job',...body})).digest('hex');const h=harness({prior:{payload_hash:hash,result:{operationId,workCostId:'source',amount:'12.3450'}}});const result=await h.service.execute('job',body,actor);assert.equal(result.alreadyPosted,true);assert.equal(result.workCostId,'source');assert.ok(!h.calls.some(c=>c.sql.includes('INSERT INTO production_work_costs')));});
 
 test('stable canonical hash ignores property order without changing payload identity',()=> {
   assert.equal(canonical({b:2,a:1}),canonical({a:1,b:2}));
@@ -253,3 +289,5 @@ test('legacy labor cannot charge a stage already using unit wage agreements',asy
   await assert.rejects(h.service.execute('job',{...command('labor'),workerName:'Ahmed',rateId:operationId},actor));
   rollback(h);assert.ok(!h.calls.some(c=>c.sql.includes('INSERT INTO production_labor_entries')));
 });
+
+test('stock issue and return reject quantities outside the item unit precision',async()=>{for(const action of ['issue','return']){const h=harness({badPrecision:true});await assert.rejects(h.service.execute('job',command(action),actor));rollback(h);assert.ok(!h.calls.some(c=>c.sql.includes('INSERT INTO inventory_movements')));}});

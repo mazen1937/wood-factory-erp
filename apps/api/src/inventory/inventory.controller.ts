@@ -1,7 +1,8 @@
-import { BadRequestException, Body, Controller, Get, Headers, Post, ForbiddenException, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Headers, Post, Query, ForbiddenException, UnauthorizedException } from '@nestjs/common';
 import { IsDateString, IsNumber, IsOptional, IsString, IsUUID, MaxLength, Min, MinLength } from 'class-validator';
 import { AuthService } from '../auth/auth.service';
 import { InventoryService } from './inventory.service';
+import { OrderAvailabilityService } from './order-availability.service';
 
 class ReceiptDto {
   @IsUUID() operationId!: string;
@@ -17,7 +18,10 @@ class ReceiptDto {
 
 @Controller('inventory')
 export class InventoryController {
-  constructor(private readonly auth: AuthService, private readonly service: InventoryService) {}
+  constructor(private readonly auth: AuthService, private readonly service: InventoryService,private readonly availability:OrderAvailabilityService=new OrderAvailabilityService()) {}
+
+  @Get('order-shortages')
+  async orderShortages(@Headers('authorization') authorization?:string){await this.user(authorization);return this.availability.report();}
 
   private async user(authorization?: string, adminOnly = false): Promise<{ sub?: string; roles?: string[] }> {
     const token = authorization?.replace(/^Bearer\s+/i, '');
@@ -34,9 +38,10 @@ export class InventoryController {
   }
 
   @Get('movements')
-  async movements(@Headers('authorization') authorization?: string) {
+  async movements(@Headers('authorization') authorization?: string,@Query('search') search?: string) {
     await this.user(authorization);
-    return this.service.movements();
+    if(search!==undefined&&(typeof search!=='string'||search.length>200))throw new BadRequestException('Search must be at most 200 characters.');
+    return this.service.movements(search);
   }
 
   @Post('receipts')

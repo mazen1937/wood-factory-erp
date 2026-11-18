@@ -101,7 +101,7 @@ public partial class MainWindow
         packagingSummary=ExecText("");packagingPanel.Children.Add(packagingSummary);
         packagingAmount=ExecInput("إجمالي تكلفة التغليف لهذا الطلب");Field(packagingPanel,"السعر الإجمالي للطلب، وليس سعر الوحدة",packagingAmount);
         packagingNotes=ExecInput("وصف التغليف — اختياري");Field(packagingPanel,"الوصف",packagingNotes);
-        ActionButton(packagingPanel,"حفظ تكلفة التعبئة والتغليف","packaging_cost",async f=>{if(await PostFormAsync("packaging_cost",new(){["amount"]=Positive(packagingAmount.Text),["notes"]=packagingNotes.Text?.Trim()},f))packagingAmount.Text="";});
+        ActionButton(packagingPanel,"حفظ تكلفة التعبئة والتغليف","packaging_cost",async f=>{if(await PostFormAsync("packaging_cost",new(){["amount"]=StrictManufacturingNumber(packagingAmount.Text),["notes"]=packagingNotes.Text?.Trim()},f))packagingAmount.Text="";});
 
         var materials=new StackPanel{Spacing=10,Margin=new Thickness(8)};
         materials.Children.Add(ExecText("عند حفظ الصرف تُخصم الكمية من المخزن وتنتقل قيمتها تلقائياً إلى تكلفة الطلب تحت الإنتاج. الرد يعيد غير المستخدم إلى مخزنه الأصلي ويخفض تكلفة الطلب."));
@@ -152,10 +152,11 @@ public partial class MainWindow
         executionMonth=ExecInput("YYYY-MM");executionMonth.Text=DateTime.Today.ToString("yyyy-MM");Field(costs,"الشهر المعروض",executionMonth);
         ActionButton(costs,"عرض تكلفة الشهر","",async f=>{await LoadExecutionDetailAsync();Notice(f,"تم عرض التقرير.",true);});
         executionCosts=ExecText("");costs.Children.Add(executionCosts);
-        costs.Children.Add(ExecText("هذه تكاليف مسجلة قبل التوزيع الشهري للمصاريف الصناعية والأجور المجمعة؛ التكلفة النهائية للمنتج تعتمد في مرحلة التكاليف."));
+        costs.Children.Add(ExecText("هذه تكاليف الإنتاج المسجلة. بعد قبول الدفعة كاملة، افتح البيع والحسابات ← بيع وتسليم لاستلامها في مخزون التام بعد مراجعة التكلفة. وجود مصاريف مشتركة غير موزعة يمنع الاستلام حتى اعتماد توزيعها."));
         executionHistory=ExecText("لا توجد حركات محفوظة بعد. بدء الإنتاج أو حفظ أي حركة سيظهر هنا بالتاريخ واسم المسجل.");
-        tabs.ItemsSource=new[]{new TabItem{Header="مراحل الشغل الجاري",Content=progress},new TabItem{Header="صرف ورد الخامات",Content=materials},new TabItem{Header="الأجور",Content=wages},new TabItem{Header="الفحص والقبول",Content=quality},new TabItem{Header="تكلفة الشغل الجاري",Content=costs},new TabItem{Header="سجل الحركات",Content=executionHistory}};
+        tabs.ItemsSource=new[]{new TabItem{Header="مراحل الشغل الجاري",Content=progress},new TabItem{Header="صرف ورد الخامات",Content=materials},new TabItem{Header="الأجور والعاملين",Content=wages},new TabItem{Header="الفحص والقبول",Content=quality},new TabItem{Header="تكلفة الشغل الجاري",Content=costs},new TabItem{Header="سجل الحركات",Content=executionHistory}};
 
+        ConfigureManufacturingWorkspace(progress,wages,costs,pause);
         var pending=new StackPanel{Spacing=8};pending.Children.Add(ExecText("هذه طلبات حفظ لم يقبلها الخادم بعد. يظهر السبب بجانب كل طلب. إعادة المحاولة ترسل نفس الطلب؛ لتصحيحه يمكنك إلغاء الطلب المرفوض ثم إدخال بيانات صحيحة في النموذج."));
         queueText=ExecText("");pending.Children.Add(queueText);queueChoice=new ProductionPicker("اختر طلب الحفظ الذي ظهر له خطأ");pending.Children.Add(queueChoice);
         queueChoice.Changed+=()=>{UpdateQueueButtons();return Task.CompletedTask;};
@@ -193,19 +194,21 @@ public partial class MainWindow
     private async Task<string> ExecutionGetAsync(string endpoint)
     {
         var key=ExecutionUserId()+":"+endpoint;
-        try{using var request=new HttpRequestMessage(HttpMethod.Get,endpoint);request.Headers.Authorization=new("Bearer",accessToken);using var response=await HttpClient.SendAsync(request);await EnsureApiSuccessAsync(response);var json=await response.Content.ReadAsStringAsync();executionOutbox!.Cache(key,json);executionOnline=true;return json;}
+        try{using var request=new HttpRequestMessage(HttpMethod.Get,endpoint);request.Headers.Authorization=new("Bearer",accessToken);using var response=await HttpClient.SendAsync(request);await EnsureProductionFeatureAsync(response,endpoint);var json=await response.Content.ReadAsStringAsync();executionOutbox!.Cache(key,json);executionOnline=true;return json;}
+        catch(ProductionApiVersionException){executionOnline=false;throw;}
         catch{executionOnline=false;var cache=executionOutbox!.Cached(key);if(cache is not null)return cache;throw;}
     }
-    private async Task RefreshProductionExecutionAsync()
+    private async Task RefreshProductionExecutionAsync(Func<string,Task<string>>? fetch=null)
     {
-        executionLoading=true;
+        fetch??=ExecutionGetAsync;executionLoading=true;
         try{
-            var selected=ExecutionJobId;var jobs=JsonSerializer.Deserialize<List<ExecJob>>(await ExecutionGetAsync("production"),JsonOptions)??[];
-            var catalog=JsonSerializer.Deserialize<List<ExecCatalog>>(await ExecutionGetAsync("production/catalog"),JsonOptions)??[];
-            currentMasterData=JsonSerializer.Deserialize<MasterDataResponse>(await ExecutionGetAsync("master-data"),JsonOptions);
+            var selected=ExecutionJobId;var jobs=JsonSerializer.Deserialize<List<ExecJob>>(await fetch("production"),JsonOptions)??[];
             executionJobRows=jobs;var choices=jobs.Select(j=>new ExecChoice(j.Id,$"{j.OrderNo} | {j.ProductCode} — {j.ProductName} | {j.CustomerNameAr} | {ExecutionStatus(j.Status)}")).ToList();
-            executionJobs.Set(choices,selected,true);qualityJobs.Set(choices,executionJobs.Value,true);
+            executionJobs.Set(choices,selected);qualityJobs.Set(choices,executionJobs.Value);
             executionTotals.Text=$"تحت الإنتاج: {jobs.Count(j=>j.Status=="in_progress")} | متوقف مؤقتاً: {jobs.Count(j=>j.Status=="on_hold")} | مقبول بانتظار التكلفة: {jobs.Count(j=>j.Status=="ready_for_costing")}";
+            var catalog=JsonSerializer.Deserialize<List<ExecCatalog>>(await fetch("production/catalog"),JsonOptions)??[];
+            currentMasterData=JsonSerializer.Deserialize<MasterDataResponse>(await fetch("master-data"),JsonOptions);
+            await RefreshManufacturingAvailabilityAsync(fetch);
             if(executionRouteChoices.Count==0)foreach(var s in catalog.Where(c=>ActiveRoute.Contains(c.Code))){var check=new CheckBox{Content=StageLabel(s.Code,s.NameAr),IsChecked=true,IsEnabled=s.Code!="quality_control"};executionRoute.Children.Add(check);executionRouteChoices.Add((check,s.Code));}
             foreach(var form in new[]{woodIssue,accessoryIssue}){
                 form.Item.Set((currentMasterData?.Items??[]).Where(i=>i.StockTracked&&i.Classification=="materials"&&i.ItemType==form.ItemType).Select(i=>new ExecChoice(i.Id,$"{i.Code} — {i.NameAr} ({currentMasterData?.Units.FirstOrDefault(u=>u.Id==i.BaseUnitId)?.Code})")));
@@ -218,7 +221,7 @@ public partial class MainWindow
     private async Task LoadExecutionDetailAsync()
     {
         var id=ExecutionJobId;var version=++executionDetailVersion;
-        executionDetail=null;UpdateExecutionButtons();executionSummary.Text="جارٍ تحميل الطلب المحدد…";
+        manufacturingTotals.Text="";manufacturingHistory.Text="";generalWorkerWages.Text="";foreach(var label in manufacturingStageTotals.Values)label.Text="إجمالي القسم لهذا الأمر: —";executionDetail=null;UpdateExecutionButtons();executionSummary.Text="جارٍ تحميل الطلب المحدد…";
         executionStages.Children.Clear();executionMaterials.Text=executionWages.Text=executionCosts.Text=executionHistory.Text=qualityHistory.Text=qualitySummary.Text="";
         if(id is null){executionSummary.Text="اختر أمر الشغل من نتائج البحث. إذا لم يوجد أمر شغل، أنشئه من الطلبات أولاً.";return;}
         try{
@@ -226,7 +229,7 @@ public partial class MainWindow
             var detail=JsonSerializer.Deserialize<ExecDetail>(await ExecutionGetAsync($"production/{id}?month={month}"),JsonOptions)??throw new InvalidOperationException("بيانات أمر الشغل فارغة.");
             if(version!=executionDetailVersion)return;
             executionDetail=detail;var job=executionJobRows.First(j=>j.Id==id);
-            if(renderedJobId!=id){foreach(var q in new[]{progressQuantity,woodIssue.Quantity,accessoryIssue.Quantity,woodReturn.Quantity,accessoryReturn.Quantity,qualityQuantity,packagingAmount})q.Text="";renderedJobId=id;}
+            if(renderedJobId!=id){foreach(var input in manufacturingInputs)input.Text="";foreach(var picker in manufacturingWorkerPickers)picker.Select(null);foreach(var q in new[]{progressQuantity,woodIssue.Quantity,accessoryIssue.Quantity,woodReturn.Quantity,accessoryReturn.Quantity,qualityQuantity,packagingAmount})q.Text="";renderedJobId=id;}
             executionSummary.Text=$"الطلب: {job.OrderNo} | المنتج: {job.ProductName} | العميل: {job.CustomerNameAr??"إنتاج مخزني"}\nالحالة: {ExecutionStatus(JsonValue(detail.Order,"status"))} | المخطط: {job.PlannedQuantity} وحدة | المقبول: {detail.Acceptances.Sum(a=>Number(a.Quantity))}";
             executionStages.Children.Clear();foreach(var s in detail.Stages.Where(s=>ActiveRoute.Contains(s.Code)))executionStages.Children.Add(ExecText($"{StageLabel(s.Code,s.NameAr)}: {s.CompletedQuantity} / {job.PlannedQuantity} وحدة",16));
             progressStage.Set(detail.Stages.Where(s=>ActiveRoute.Contains(s.Code)&&s.Code!="quality_control").Select(s=>new ExecChoice(s.Id,StageLabel(s.Code,s.NameAr))),first:true);
@@ -235,7 +238,7 @@ public partial class MainWindow
             wasteIssue.Set(detail.Materials.Where(m=>m.OriginalIssueId is null&&Number(m.ReturnableQuantity)>0).Select(m=>new ExecChoice(m.Id,$"{m.ItemCode} — {m.ItemNameAr} | متاح: {m.ReturnableQuantity} {m.UnitCode}")));
             executionMaterials.Text=detail.Materials.Count==0?"لم يسجل صرف أو رد خامات لهذا الطلب بعد.":string.Join(Environment.NewLine,detail.Materials.Select(m=>$"{m.Date} | {(m.OriginalIssueId is null?"صرف":"مرتجع")} | {m.ItemNameAr} | {m.Quantity} {m.UnitCode} | {m.WarehouseNameAr} | القيمة: {m.Amount}"));
             packagingSummary.Text=detail.Packaging.Count==0?"لم تسجل تكلفة تغليف لهذا الطلب بعد.":$"تكلفة التغليف المسجلة: {detail.Packaging[0].Amount} — بتاريخ {detail.Packaging[0].Date}";
-            RenderWages(detail);RenderQuality(detail);RenderWip(detail);
+            RenderWages(detail);RenderQuality(detail);RenderWip(detail);RenderManufacturingCosts(detail);
             executionHistory.Text=detail.Events.Count==0?"لا توجد حركات محفوظة لهذا الطلب بعد. ستظهر الحركة هنا بعد حفظها بنجاح.":string.Join("\n\n",detail.Events.Select(ev=>$"{ev.Date} | {ExecutionAction(ev.Action)} | سجّلها: {ev.Actor}"+(JsonValue(ev.Payload,"quantity")==""?"":$" | العدد: {JsonValue(ev.Payload,"quantity")}")+(JsonValue(ev.Payload,"workerName")==""?"":$" | العامل: {JsonValue(ev.Payload,"workerName")}")+(string.IsNullOrWhiteSpace(ev.Notes)?"":$"\n{ev.Notes}")));
             UpdateExecutionButtons();
         }catch(Exception ex){if(version==executionDetailVersion){executionDetail=null;executionMessage.Text=FriendlyError(ex);UpdateExecutionButtons();}throw;}
@@ -280,7 +283,7 @@ public partial class MainWindow
     private void RenderQuality(ExecDetail detail)
     {
         var accepted=detail.Acceptances.Sum(a=>Number(a.Quantity));var rejected=detail.Quality.Where(q=>q.Decision=="rejected").Sum(q=>Number(q.Quantity))-detail.Quality.Where(q=>q.Reinspection).Sum(q=>Number(q.Quantity));
-        var upstream=detail.Stages.LastOrDefault(s=>s.Code!="quality_control");var ready=Number(upstream?.CompletedQuantity)-accepted-rejected;
+        var upstream=detail.Stages.LastOrDefault(s=>s.Code!="quality_control");var ready=((JsonValue(detail.Order,"cost_focused") is "true" or "True")?Number(executionJobRows.FirstOrDefault(j=>j.Id==ExecutionJobId)?.PlannedQuantity):Number(upstream?.CompletedQuantity))-accepted-rejected;
         qualitySummary.Text=$"الطلب: {executionJobRows.FirstOrDefault(j=>j.Id==ExecutionJobId)?.OrderNo}\nجاهز لفحص جديد: {Math.Max(0,ready)} | مقبول: {accepted} | مرفوض ينتظر إصلاحاً وإعادة فحص: {rejected}";
         qualityReinspection.IsEnabled=rejected>0;if(rejected<=0)qualityReinspection.IsChecked=false;
         qualityHistory.Text=detail.Quality.Count==0?"لم تسجل قرارات فحص لهذا الطلب بعد.":string.Join(Environment.NewLine,detail.Quality.Select(q=>$"{q.Date} | {(q.Reinspection?"إعادة فحص":"فحص جديد")} | {(q.Decision=="accepted"?"مقبول":"مرفوض")} | العدد: {q.Quantity} | الفاحص: {q.Inspector} | {q.Reason}"));
@@ -290,6 +293,7 @@ public partial class MainWindow
         var w=detail.Wip;var direct=detail.Costs.Where(c=>c.Treatment=="direct"&&c.Date.StartsWith(w.Month)).ToList();
         decimal Sum(params string[] types)=>direct.Where(c=>types.Contains(c.Type)).Sum(c=>Number(c.Amount));
         executionCosts.Text=$"الشهر: {w.Month}\nقيمة الشغل المرحلة من الشهور السابقة: {w.OpeningDirectCost}\n\nخامات وإكسسوارات مصروفة ناقص المرتجع هذا الشهر: {Sum("material_issue","material_return"):N4}\nأجور مستحقة مباشرة هذا الشهر: {Sum("labor","wage_accrual"):N4}\nتعبئة وتغليف هذا الشهر: {Sum("packaging"):N4}\nتكاليف إنتاج أخرى سبق تسجيلها: {Sum("consumable"):N4}\n\nإجمالي الإضافات الصافية للشهر: {w.CurrentDirectCost}\nقيمة الشغل تحت الإنتاج حتى نهاية الشهر: {w.ClosingDirectCost}\nأجور مجمعة تنتظر التوزيع الشهري (خارج الإجمالي المباشر): {w.PooledWages}";
+        executionCosts.Text+=$"\nتكلفة محولة إلى مخزون التام هذا الشهر: {w.TransferredDirectCost} (ليست مصروفاً جديداً)";
     }
     private async Task SubmitQualityAsync(string decision,TextBlock feedback)
     {
@@ -307,7 +311,7 @@ public partial class MainWindow
         // payload supersedes only rejected local copies of this form; official posts remain.
         foreach(var blocked in executionOutbox.Commands(user).Where(c=>c.JobId==job&&c.Status=="blocked")){
             using var json=JsonDocument.Parse(blocked.Payload);
-            if(JsonValue(json.RootElement,"action")==action&&blocked.Id!=id)executionOutbox.Mark(blocked.Id,"abandoned","استبدل المستخدم طلب الحفظ المرفوض ببيانات مصححة");
+            if(action!="work_cost"&&JsonValue(json.RootElement,"action")==action&&blocked.Id!=id)executionOutbox.Mark(blocked.Id,"abandoned","استبدل المستخدم طلب الحفظ المرفوض ببيانات مصححة");
         }
         if(executionOutbox.Command(user,id)?.Status=="blocked")executionOutbox.Mark(id,"pending","");
         executionNextRetry=DateTime.MinValue;await SyncProductionExecutionAsync();
@@ -319,6 +323,7 @@ public partial class MainWindow
         var command=executionOutbox!.Command(ExecutionUserId(),id);
         if(command?.Status=="accepted"){
             using var result=JsonDocument.Parse(command.Detail);var amount=JsonValue(result.RootElement,"amount");var earned=JsonValue(result.RootElement,"earnedAmount");
+            if(JsonValue(result.RootElement,"action")=="work_cost"){Notice(feedback,"تم تسجيل تكلفة التصنيع لهذا الأمر: "+amount+" ج.م.",true);return true;}
             Notice(feedback,"تم الحفظ بنجاح وظهرت الحركة في سجل الحركات."+(amount==""?"":$" القيمة المضافة / المردودة: {amount}.")+(earned==""?"":$" أجر مستحق مسجل: {earned}."),true);return true;
         }
         if(command?.Status=="blocked")Notice(feedback,"لم يُحفظ الطلب: "+ExecutionError(command.Detail)+" صحح البيانات واضغط حفظ مرة أخرى.",false);
@@ -358,7 +363,9 @@ public partial class MainWindow
     {
         var state=executionDetail is null?"":JsonValue(executionDetail.Order,"status");
         foreach(var (button,action) in executionButtons)button.IsEnabled=action switch{
-            "start"=>state is "draft" or "open","hold"=>state=="in_progress","resume"=>state=="on_hold",
+            "start"=>manufacturingApiReady&&(state is "draft" or "open"),"hold"=>state=="in_progress","resume"=>state=="on_hold",
+            "cost_mode"=>manufacturingApiReady&&(state is "in_progress" or "on_hold")&&executionDetail is not null&&JsonValue(executionDetail.Order,"cost_focused")!="True"&&JsonValue(executionDetail.Order,"cost_focused")!="true",
+            "work_cost"=>manufacturingApiReady&&(state is "in_progress" or "on_hold" or "ready_for_costing")&&executionDetail is not null&&(JsonValue(executionDetail.Order,"cost_focused")=="True"||JsonValue(executionDetail.Order,"cost_focused")=="true"),
             "quality_check"=>state is "in_progress" or "on_hold",
             "packaging_cost"=>(state is "in_progress" or "on_hold" or "ready_for_costing")&&executionDetail?.Packaging.Count==0,
             "return" or "waste" or "wage_agreement" or "wage_due"=>state is "in_progress" or "on_hold" or "ready_for_costing",
@@ -378,7 +385,7 @@ public partial class MainWindow
     private static string ExecutionError(string value){try{using var json=JsonDocument.Parse(value);return JsonValue(json.RootElement,"message");}catch{return value;}}
     private static string ExecutionStatus(string value)=>value switch{"draft" or "open"=>"لم يبدأ الإنتاج","in_progress"=>"تحت الإنتاج","on_hold"=>"متوقف مؤقتاً","ready_for_costing"=>"مقبول بانتظار التكلفة والترحيل","completed"=>"مكتمل",_=>value};
     private static string WageBasisLabel(string basis)=>basis switch{"unit"=>"لكل وحدة منجزة","daily"=>"يومي","weekly"=>"أسبوعي","monthly"=>"شهري",_=>basis};
-    private static string ExecutionAction(string action)=>action switch{"start"=>"بدء الإنتاج","progress"=>"إنجاز مرحلة","issue" or "material_issue"=>"صرف خامات","return" or "material_return"=>"رد خامات","waste"=>"هالك فعلي","hold"=>"إيقاف مؤقت","resume"=>"استئناف","quality_check"=>"فحص وقبول / رفض","accept"=>"قبول","wage_agreement"=>"اتفاق أجر عامل","wage_due" or "wage_accrual"=>"استحقاق أجر","packaging_cost" or "packaging"=>"تكلفة تعبئة وتغليف","labor"=>"أجر مسجل","consumable"=>"تكلفة مستهلك",_=>action};
+    private static string ExecutionAction(string action)=>action switch{"work_cost"=>"تكلفة تصنيع","cost_mode"=>"تفعيل حساب المصاريف","start"=>"بدء الإنتاج","progress"=>"إنجاز مرحلة","issue" or "material_issue"=>"صرف خامات","return" or "material_return"=>"رد خامات","waste"=>"هالك فعلي","hold"=>"إيقاف مؤقت","resume"=>"استئناف","quality_check"=>"فحص وقبول / رفض","accept"=>"قبول","wage_agreement"=>"اتفاق أجر عامل","wage_due" or "wage_accrual"=>"استحقاق أجر","packaging_cost" or "packaging"=>"تكلفة تعبئة وتغليف","labor"=>"أجر مسجل","consumable"=>"تكلفة مستهلك",_=>action};
     private sealed class ProductionPicker:StackPanel
     {
         private readonly AutoCompleteBox box;private bool updating;private List<ExecChoice> choices=[];
@@ -399,9 +406,9 @@ public partial class MainWindow
     private sealed record ExecCost(string Type,string Amount,string Treatment,string Date,string? Description);
     private sealed record ExecEvent(string Action,string Date,string? Notes,string Actor,JsonElement Payload);
     private sealed record ExecAcceptance(string Quantity,string Date,string Status);
-    private sealed record ExecWip(string Month,string OpeningDirectCost,string CurrentDirectCost,string ClosingDirectCost,string PooledWages);
+    private sealed record ExecWip(string Month,string OpeningDirectCost,string CurrentDirectCost,string ClosingDirectCost,string PooledWages,string TransferredDirectCost="0");
     private sealed record ExecWage(string Id,string WorkerName,string StageId,string StageName,string Basis,string Rate,string? AssignedQuantity,string AccruedQuantity,string Treatment,string PeriodStart,string? PeriodEnd,string EarnedAmount);
     private sealed record ExecQuality(string Quantity,string Decision,bool Reinspection,string? Reason,string Date,string Inspector);
     private sealed record ExecPackaging(string Amount,string Date,string Description);
-    private sealed record ExecDetail(JsonElement Order,List<ExecStage> Stages,List<ExecMaterial> Materials,List<ExecCost> Costs,List<ExecEvent> Events,List<ExecAcceptance> Acceptances,ExecWip Wip,List<ExecWage> Wages,List<ExecQuality> Quality,List<ExecPackaging> Packaging);
+    private sealed record ExecDetail(JsonElement Order,List<ExecStage> Stages,List<ExecMaterial> Materials,List<ExecCost> Costs,List<ExecEvent> Events,List<ExecAcceptance> Acceptances,ExecWip Wip,List<ExecWage> Wages,List<ExecQuality> Quality,List<ExecPackaging> Packaging,List<ManufacturingWork>? WorkCosts=null);
 }

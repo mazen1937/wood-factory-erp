@@ -1,3 +1,5 @@
+import {prepareCompletion,READY_JOBS_SQL} from './finished-goods';
+import {MANUFACTURING_REPORT_SQL} from '../production/manufacturing-costs';
 import {BadRequestException,ConflictException,ForbiddenException,Injectable,NotFoundException} from '@nestjs/common';
 import {createHash,randomUUID} from 'crypto';
 import {Pool,PoolClient} from 'pg';
@@ -36,12 +38,13 @@ export class FinanceService {
  async execute(b:FinanceCommandDto,user:string){
   b={...b}; // Resolve source party on a private copy; retry payload remains immutable.
   const originalBody={...b};
+  if(b.kind==='sale_and_delivery'){if(b.deliverNow===false)throw new BadRequestException('عملية البيع والتسليم لا تقبل إلغاء التسليم في نفس الطلب.');b.kind='sale';b.deliverNow=true;}
   const c=await this.pool.connect();try{
-   await c.query('BEGIN');await this.role(c,user,['opening_treasury','reversal'].includes(b.kind));
+   await c.query('BEGIN');await this.role(c,user,['opening_treasury','reversal','production_completion'].includes(b.kind));
    // Deliberately serialize finance postings at this factory's scale. Existing stock
    // services share item-row locks, so production cannot overspend stock either.
    await c.query("SELECT pg_advisory_xact_lock(hashtext('finance-posting-v1'))");
-   const hash=this.hash({user,body:b});const prior=await c.query('SELECT payload_hash,result,serial::text FROM finance_documents WHERE operation_id=$1',[b.operationId]);
+   const hash=this.hash({user,body:originalBody});const prior=await c.query('SELECT payload_hash,result,serial::text FROM finance_documents WHERE operation_id=$1',[b.operationId]);
    if(prior.rowCount){if(prior.rows[0].payload_hash!==hash)throw new ConflictException('معرّف الحفظ مستخدم لبيانات مختلفة.');await c.query('COMMIT');return {...prior.rows[0].result,serial:prior.rows[0].serial,alreadyPosted:true};}
    const date=await c.query('SELECT $1::date<=CURRENT_DATE AS valid',[b.date]);if(!date.rows[0].valid)throw new BadRequestException('لا يمكن ترحيل تاريخ في المستقبل.');
    await c.query(`INSERT INTO accounting_periods(month) VALUES(date_trunc('month',$1::date)::date) ON CONFLICT DO NOTHING`,[b.date]);
@@ -52,7 +55,19 @@ export class FinanceService {
    const id=randomUUID(),t=zero();let extra:any={};let deferred:()=>Promise<void>=async()=>{};
    // Each branch prepares rows inside the same transaction. The document parent is
    // inserted first with final totals below; child operations execute afterwards.
-   if(b.kind==='sale'||b.kind==='purchase_fg'){
+   if(b.kind==='production_completion'){
+    const prepared=await prepareCompletion(c,b);const l=b.lines![0];
+    const item=await this.finishedItem(c,l.itemId,l.warehouseId,prepared.q);const stock=await this.lockStock(c,l.itemId,l.warehouseId,b.date);
+    const entry={...l,id:randomUUID(),q:prepared.q,price:rounded(prepared.cost*SCALE,prepared.q),sub:prepared.cost,discount:0n,net:prepared.cost,tax:0n,cost:prepared.cost,item};
+    t.subtotal=t.net=prepared.cost;await this.stock(c,b,id,entry,1,prepared.cost,stock,user);extra.productionOrderId=prepared.job.id;
+    deferred=async()=>{
+     await this.line(c,id,entry);
+     await c.query(`INSERT INTO production_completions(production_order_id,document_id,line_id,quantity,cost,posting_date,approved_by,source_snapshot) VALUES($1,$2,$3,$4::numeric,$5::numeric,$6::date,$7,$8::jsonb)`,[prepared.job.id,id,entry.id,decimal(prepared.q),prepared.total,b.date,user,JSON.stringify(prepared.snapshot)]);
+     await c.query("UPDATE production_acceptances SET status='transferred' WHERE production_order_id=$1 AND status='pending_costing'",[prepared.job.id]);
+     await c.query("UPDATE production_orders SET status='completed' WHERE id=$1",[prepared.job.id]);
+    };
+   }else if(b.kind==='sale'||b.kind==='purchase_fg'){
+    if(b.kind==='sale'&&b.deliverNow)extra.deliveredNow=true;
     if(!b.partyId||!b.lines?.length)throw new BadRequestException('اختر الطرف وأضف بنود المستند.');
     this.uniqueLines(b.lines);const lines:any[]=[];
     for(const l of [...b.lines].sort((a,d)=>a.itemId.localeCompare(d.itemId)||a.warehouseId.localeCompare(d.warehouseId))){
@@ -75,7 +90,7 @@ export class FinanceService {
      await this.stock(c,b,id,entry,b.kind==='sale'?-1:1,cost,stock,user);
     }
     t.delivery=units(b.deliveryCharge??'0');if(b.kind==='purchase_fg'&&t.delivery!==0n)throw new BadRequestException('سجل نقل المشتريات كمصروف مستقل.');
-    deferred=async()=>{for(const l of lines)await this.line(c,id,l);await this.obligation(c,id,b.partyId!,b.kind==='sale'?'ar':'ap',t.net+t.tax+t.delivery);};
+    deferred=async()=>{for(const l of lines){await this.line(c,id,l);if(b.kind==='sale'&&b.deliverNow)await c.query('INSERT INTO finance_deliveries(document_id,sale_line_id,quantity) VALUES($1,$2,$3::numeric)',[id,l.id,decimal(l.q)]);}await this.obligation(c,id,b.partyId!,b.kind==='sale'?'ar':'ap',t.net+t.tax+t.delivery);};
    }else if(b.kind==='sales_return'){
     const source=await this.source(c,b,'sale');if(!['return','cancel'].includes(b.returnType??''))throw new BadRequestException('حدد مرتجع مستلم أم إلغاء كمية لم تسلم.');
     if(!b.lines?.length)throw new BadRequestException('اختر بنود البيع الأصلية والكميات.');this.uniqueLines(b.lines);
@@ -117,12 +132,13 @@ export class FinanceService {
    }else if(b.kind==='supplier_invoice'||b.kind==='wage_payable'){
     const ids=b.sourceIds??[];if(!ids.length||new Set(ids).size!==ids.length)throw new BadRequestException('اختر مصادر غير مكررة.');
     if(b.kind==='supplier_invoice'&&(!b.partyId||b.sourceType!=='inventory_receipt'))throw new BadRequestException('فاتورة المورد تربط الاستلام المخزني الأصلي، ولا تعيد استلامه.');
-    if(b.kind==='wage_payable'&&(ids.length!==1||!['wage_accrual','legacy_labor'].includes(b.sourceType??'')))throw new BadRequestException('اختر استحقاق أجر واحداً.');
+    if(b.kind==='wage_payable'&&(ids.length!==1||!['wage_accrual','legacy_labor','job_work'].includes(b.sourceType??'')))throw new BadRequestException('اختر استحقاق أجر واحداً.');
     let worker:string|null=null;
     for(const sourceId of ids){
      let row:any;
      if(b.kind==='supplier_invoice')row=(await c.query(`SELECT total_cost::text AS amount,movement_date::text AS date FROM inventory_movements WHERE id=$1 AND movement_type='receipt' AND party_id=$2 FOR SHARE`,[sourceId,b.partyId])).rows[0];
      else if(b.sourceType==='wage_accrual')row=(await c.query(`SELECT a.amount::text,a.posting_date::text AS date,w.worker_name FROM production_wage_accruals a JOIN production_wage_agreements w ON w.id=a.agreement_id WHERE a.id=$1 FOR SHARE OF a,w`,[sourceId])).rows[0];
+     else if(b.sourceType==='job_work')row=(await c.query(`SELECT amount::text,posting_date::text AS date,worker_snapshot AS worker_name FROM production_work_costs WHERE id=$1 AND worker_id IS NOT NULL FOR SHARE`,[sourceId])).rows[0];
      else row=(await c.query(`SELECT amount::text,posting_date::text AS date,worker_name FROM production_labor_entries WHERE id=$1 FOR SHARE`,[sourceId])).rows[0];
      if(!row||row.date>b.date)throw new BadRequestException('مصدر غير صالح أو تاريخ المستند يسبق المصدر.');t.net+=val(row.amount);worker=row.worker_name??null;
     }
@@ -179,7 +195,8 @@ export class FinanceService {
  private async party(c:PoolClient,id:string,type:string|null){const r=await c.query(`SELECT id FROM parties WHERE id=$1 AND active AND ($2::text IS NULL OR party_type IN ($2,'both')) FOR SHARE`,[id,type]);if(!r.rowCount)throw new BadRequestException('الطرف غير موجود أو غير نشط أو ليس من النوع المطلوب.');}
  private async source(c:PoolClient,b:FinanceCommandDto,kind?:string){const r=await c.query('SELECT *,posting_date::text AS posting_date FROM finance_documents WHERE id=$1 FOR UPDATE',[b.sourceId]);if(!r.rowCount)throw new NotFoundException('المستند الأصلي غير موجود.');const s=r.rows[0];
   if(kind&&s.kind!==kind||b.partyId&&s.party_id!==b.partyId||b.date<this.dateText(s.posting_date))throw new BadRequestException('المستند الأصلي أو الطرف أو التاريخ غير متوافق.');
-  b.partyId=s.party_id??undefined;return s;
+  if(b.orderId&&b.orderId!==s.customer_order_id)throw new BadRequestException('الطلب لا يطابق الطلب المرتبط بالمستند الأصلي.');
+  b.partyId=s.party_id??undefined;b.orderId=s.customer_order_id??undefined;return s;
  }
  private async finishedItem(c:PoolClient,item:string,warehouse:string,q:bigint){const r=await c.query(`SELECT i.code,i.name_ar,u.code AS unit_code,u.precision_digits FROM items i JOIN units_of_measure u ON u.id=i.base_unit_id WHERE i.id=$1 AND i.active AND i.stock_tracked AND i.item_type='finished_good' AND i.classification='materials' FOR SHARE OF i,u`,[item]);
   if(!r.rowCount)throw new BadRequestException('اختر منتجاً تاماً مخزنياً نشطاً.');const w=await c.query(`SELECT id FROM warehouses WHERE id=$1 AND active AND warehouse_type='finished_goods' FOR SHARE`,[warehouse]);if(!w.rowCount)throw new BadRequestException('اختر مخزن منتجات تامة.');
@@ -202,7 +219,7 @@ export class FinanceService {
   await c.query('UPDATE inventory_item_costs SET quantity_on_hand=$2,inventory_value=$3,average_unit_cost=$4,updated_at=now() WHERE item_id=$1',[e.itemId,decimal(q),decimal(v),decimal(avg)]);
   await c.query('UPDATE inventory_balances SET quantity_on_hand=quantity_on_hand+$3::numeric,updated_at=now() WHERE item_id=$1 AND warehouse_id=$2',[e.itemId,e.warehouseId,decimal(BigInt(direction)*e.q)]);
   await c.query(`INSERT INTO inventory_movements(operation_id,movement_type,item_id,warehouse_id,party_id,document_reference,movement_date,quantity,unit_cost,total_cost,average_cost_after,quantity_after,value_after,notes,posted_by)
-   VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,[e.id,b.kind==='sale'?'sale_issue':b.kind==='purchase_fg'?'finished_purchase':'sales_return',e.itemId,e.warehouseId,b.partyId??null,b.reference.trim(),b.date,decimal(e.q),decimal(rounded(cost*SCALE,e.q)),decimal(cost),decimal(avg),decimal(q),decimal(v),'finance:'+doc,user]);
+   VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,[e.id,b.kind==='sale'?'sale_issue':b.kind==='purchase_fg'?'finished_purchase':b.kind==='production_completion'?'production_completion':'sales_return',e.itemId,e.warehouseId,b.partyId??null,b.reference.trim(),b.date,decimal(e.q),decimal(rounded(cost*SCALE,e.q)),decimal(cost),decimal(avg),decimal(q),decimal(v),'finance:'+doc,user]);
  }
  private async line(c:PoolClient,doc:string,e:any){await c.query(`INSERT INTO finance_lines(id,document_id,item_id,warehouse_id,source_line_id,quantity,unit_price,subtotal,discount,net,tax,total,cogs,tax_policy_id,item_code,item_name,unit_code)
   VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,[e.id,doc,e.itemId,e.warehouseId,e.sourceLineId??null,decimal(e.q),decimal(e.price),decimal(e.sub),decimal(e.discount),decimal(e.net),decimal(e.tax),decimal(e.net+e.tax),decimal(e.cost),e.taxPolicyId??null,e.item.code,e.item.name_ar,e.item.unit_code]);}
@@ -244,8 +261,13 @@ export class FinanceService {
    (SELECT COALESCE(SUM(available),0)::text FROM finance_settlement_balances WHERE side='ar') AS advances FROM sales`)).rows[0];
   const receipts=(await c.query(`SELECT m.id,m.document_reference,m.party_id,m.total_cost::text AS amount,m.movement_date::text AS date,p.name_ar AS party FROM inventory_movements m JOIN parties p ON p.id=m.party_id WHERE m.movement_type='receipt' AND m.total_cost>0 AND NOT EXISTS(SELECT 1 FROM finance_source_links s WHERE s.source_type='inventory_receipt' AND s.source_id=m.id) ORDER BY m.movement_date,m.id`)).rows;
   const wages=(await c.query(`SELECT a.id,'wage_accrual' AS source_type,w.worker_name,a.amount::text,a.posting_date::text AS date FROM production_wage_accruals a JOIN production_wage_agreements w ON w.id=a.agreement_id WHERE a.amount>0 AND NOT EXISTS(SELECT 1 FROM finance_source_links s WHERE s.source_type='wage_accrual' AND s.source_id=a.id)
-   UNION ALL SELECT a.id,'legacy_labor',a.worker_name,a.amount::text,a.posting_date::text FROM production_labor_entries a WHERE a.amount>0 AND NOT EXISTS(SELECT 1 FROM finance_source_links s WHERE s.source_type='legacy_labor' AND s.source_id=a.id)`)).rows;
-  const stock=(await c.query(`SELECT i.id AS item_id,i.code,i.name_ar,w.name_ar AS warehouse,b.warehouse_id,b.quantity_on_hand::text AS quantity,c.average_unit_cost::text AS unit_cost FROM inventory_balances b JOIN items i ON i.id=b.item_id JOIN warehouses w ON w.id=b.warehouse_id JOIN inventory_item_costs c ON c.item_id=i.id WHERE i.item_type='finished_good' AND w.warehouse_type='finished_goods' ORDER BY i.code,w.code`)).rows;
+   UNION ALL SELECT a.id,'legacy_labor',a.worker_name,a.amount::text,a.posting_date::text FROM production_labor_entries a WHERE a.amount>0 AND NOT EXISTS(SELECT 1 FROM finance_source_links s WHERE s.source_type='legacy_labor' AND s.source_id=a.id)
+   UNION ALL SELECT a.id,'job_work',a.worker_snapshot,a.amount::text,a.posting_date::text FROM production_work_costs a WHERE a.worker_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM finance_source_links s WHERE s.source_type='job_work' AND s.source_id=a.id)`)).rows;
+  const manufacturing=(await c.query(MANUFACTURING_REPORT_SQL)).rows;
+  const readyJobs=(await c.query(READY_JOBS_SQL)).rows;
+  const savedPrices=(await c.query(`SELECT id,item_id AS "itemId",customer_order_id AS "orderId",unit_price::text AS "unitPrice",effective_date::text AS date,created_at::text AS "createdAt" FROM product_selling_prices ORDER BY effective_date DESC,created_at DESC,id`)).rows;
+  const salesDiagnostics=(await c.query(`SELECT (SELECT COUNT(*)::int FROM finance_documents WHERE kind='sale') AS "saleCount",(SELECT COUNT(*)::int FROM production_orders WHERE status='ready_for_costing') AS "awaitingCosting",(SELECT COUNT(*)::int FROM items WHERE active AND item_type='finished_good' AND stock_tracked) AS "finishedItemCount"`)).rows[0];
+  const stock=(await c.query(`SELECT i.id AS item_id,i.code,i.name_ar,w.name_ar AS warehouse,b.warehouse_id,b.quantity_on_hand::text AS quantity,c.average_unit_cost::text AS unit_cost,c.quantity_on_hand::text AS global_quantity,c.inventory_value::text AS inventory_value FROM inventory_balances b JOIN items i ON i.id=b.item_id JOIN warehouses w ON w.id=b.warehouse_id JOIN inventory_item_costs c ON c.item_id=i.id WHERE i.item_type='finished_good' AND w.warehouse_type='finished_goods' ORDER BY i.code,w.code`)).rows;
   const orders=(await c.query(`SELECT id,order_no,product_name,customer_id FROM customer_orders WHERE status<>'cancelled' ORDER BY order_no`)).rows;
   const reconciliations=(await c.query(`SELECT
    (SELECT COUNT(*)::int FROM finance_obligation_balances WHERE outstanding<0 OR allocated<0 OR credited>amount) AS invalid_obligations,
@@ -254,7 +276,7 @@ export class FinanceService {
    (SELECT COUNT(*)::int FROM finance_documents d WHERE kind IN ('sale','sales_return') AND (d.net<>(SELECT COALESCE(SUM(net),0) FROM finance_lines l WHERE l.document_id=d.id) OR d.tax<>(SELECT COALESCE(SUM(tax),0) FROM finance_lines l WHERE l.document_id=d.id) OR d.cogs<>(SELECT COALESCE(SUM(cogs),0) FROM finance_lines l WHERE l.document_id=d.id))) AS invalid_sales,
    (SELECT COUNT(*)::int FROM inventory_item_costs c WHERE c.quantity_on_hand<>(SELECT COALESCE(SUM(b.quantity_on_hand),0) FROM inventory_balances b WHERE b.item_id=c.item_id)) AS invalid_stock_quantities,
    (SELECT COUNT(*)::int FROM inventory_item_costs c WHERE c.inventory_value<>(SELECT COALESCE(SUM(CASE WHEN movement_type IN ('production_issue','sale_issue') THEN -total_cost ELSE total_cost END),0) FROM inventory_movements m WHERE m.item_id=c.item_id)) AS invalid_stock_values`)).rows[0];
-  await c.query('COMMIT');return {accounts,documents,obligations,settlements,policies,lines,treasury,summary,receipts,wages,reconciliations,stock,orders,invoiceSales};
+  await c.query('COMMIT');return {accounts,documents,obligations,settlements,policies,lines,treasury,summary,receipts,wages,reconciliations,stock,orders,invoiceSales,manufacturing,readyJobs,savedPrices,salesDiagnostics,capabilities:['guided_sales_v1','sale_delivery_atomic','full_batch_direct_cost_receipt']};
  }catch(e){await c.query('ROLLBACK');throw e;}finally{c.release();}}
  private async roleRead(c:PoolClient,user:string){const r=await c.query(`SELECT u.id FROM users u JOIN user_roles ur ON ur.user_id=u.id JOIN roles r ON r.id=ur.role_id WHERE u.id=$1 AND u.active AND r.code=ANY($2::text[])`,[user,['system_admin','finance_manager','finance_operator','finance_viewer']]);if(!r.rowCount)throw new ForbiddenException('ليس لديك صلاحية عرض المالية.');}
 }

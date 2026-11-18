@@ -133,7 +133,7 @@ public partial class MainWindow
 
     private sealed record PendingOrderAttachment(string Name, string? Description, string? Color, string AttachmentType, string FileName, string MimeType, byte[] Content);
     private sealed record PendingOrderAccessory(string ItemId, string Label, decimal Quantity);
-    private sealed record ConfirmedOrderResult(string Id, string OrderNo);
+    private sealed record ConfirmedOrderResult(string Id, string OrderNo, OrderStockAvailability? Availability = null);
     private sealed record CompleteOrderDetail(string Id, string OrderNo, string? ProductCode, string? ProductName, string CustomerNameAr, int? TotalBoards, string? WastePercentage, string? Notes, List<OrderAttachmentDetail> Attachments, List<OrderAccessoryDetail> Accessories, List<OrderAccessoryDetail>? Materials, string? OrderName, string? OrderDate, string? RequestedDeliveryDate, List<OrderLinkedJob>? Jobs);
     private sealed record OrderAttachmentDetail(string Id, string Name, string? Description, string? Color, string FileName, string MimeType);
     private sealed record OrderAccessoryDetail(string ItemCode, string ItemNameAr, string Quantity, string UnitCode);

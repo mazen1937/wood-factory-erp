@@ -16,7 +16,10 @@ export class FinanceAllocationDto {
 }
 export class FinanceCommandDto {
  @IsUUID() operationId!:string;
- @IsIn(['sale','sales_return','invoice','delivery','customer_receipt','supplier_payment','expense','supplier_invoice','purchase_fg','wage_payable','allocation','transfer','opening_treasury','customer_refund','reversal']) kind!:string;
+ @IsIn(['sale','sales_return','invoice','delivery','customer_receipt','supplier_payment','expense','supplier_invoice','purchase_fg','wage_payable','allocation','transfer','opening_treasury','customer_refund','reversal','production_completion','sale_and_delivery']) kind!:string;
+ @IsOptional() @IsUUID() productionOrderId?:string;
+ @IsOptional() @IsBoolean() costApproved?:boolean;
+ @IsOptional() @IsBoolean() deliverNow?:boolean;
  @IsString() @MaxLength(120) @Matches(/\S/) reference!:string;
  @Matches(/^\d{4}-\d{2}-\d{2}$/) @IsDateString({strict:true}) date!:string;
  @IsOptional() @IsUUID() partyId?:string;
@@ -34,7 +37,15 @@ export class FinanceCommandDto {
  @IsOptional() @IsArray() @ArrayMaxSize(100) @ValidateNested({each:true}) @Type(()=>FinanceAllocationDto) allocations?:FinanceAllocationDto[];
  @IsOptional() @IsArray() @ArrayMinSize(1) @ArrayMaxSize(100) @ArrayUnique() @IsUUID(undefined,{each:true}) saleIds?:string[];
  @IsOptional() @IsArray() @ArrayMinSize(1) @ArrayMaxSize(100) @ArrayUnique() @IsUUID(undefined,{each:true}) sourceIds?:string[];
- @IsOptional() @IsIn(['inventory_receipt','wage_accrual','legacy_labor']) sourceType?:string;
+ @IsOptional() @IsIn(['inventory_receipt','wage_accrual','legacy_labor','job_work']) sourceType?:string;
+}
+export class SellingPriceDto {
+ @IsUUID() operationId!:string;
+ @IsUUID() itemId!:string;
+ @IsOptional() @IsUUID() orderId?:string;
+ @Matches(/^\d{1,12}(\.\d{1,4})?$/) unitPrice!:string;
+ @Matches(/^\d{4}-\d{2}-\d{2}$/) @IsDateString({strict:true}) date!:string;
+ @IsOptional() @IsString() @MaxLength(2000) notes?:string;
 }
 export class FinanceConfigDto {
  @IsUUID() operationId!:string;

@@ -20,7 +20,8 @@ export class InventoryService {
     return result.rows;
   }
 
-  async movements() {
+  async movements(search?:string) {
+    const terms=(search??'').trim().split(/\s+/).filter(Boolean).slice(0,20);
     const result = await this.pool.query(`
       SELECT m.id, m.movement_type AS "movementType", m.operation_id AS "operationId", m.document_reference AS "documentReference",
              m.movement_date AS "movementDate", m.item_id AS "itemId", i.code AS "itemCode",
@@ -32,8 +33,15 @@ export class InventoryService {
       FROM inventory_movements m
       JOIN items i ON i.id = m.item_id
       JOIN warehouses w ON w.id = m.warehouse_id
+      JOIN units_of_measure u ON u.id=i.base_unit_id
       LEFT JOIN parties p ON p.id = m.party_id
-      ORDER BY m.posted_at DESC, m.id DESC LIMIT 250`);
+      WHERE NOT EXISTS(SELECT 1 FROM unnest($1::text[]) AS term(value)
+        WHERE concat_ws(' ',i.id,i.code,i.name_ar,i.name_en,i.item_type,u.code,u.name_ar,u.name_en,
+          w.id,w.code,w.name_ar,w.name_en,p.code,p.name_ar,p.name_en,m.id,m.operation_id,m.document_reference,
+          m.movement_date,m.quantity,m.unit_cost,m.total_cost,m.notes,m.movement_type,
+          CASE i.item_type WHEN 'raw_material' THEN 'خامة خامات' WHEN 'accessory' THEN 'إكسسوار اكسسوار إكسسوارات اكسسوارات' WHEN 'consumable' THEN 'مستهلك مستهلكات' ELSE 'منتج تام' END)
+        NOT ILIKE term.value ESCAPE '\\')
+      ORDER BY m.posted_at DESC, m.id DESC LIMIT 250`,[terms.map(t=>'%'+t.replace(/[\\%_]/g,'\\$&')+'%')]);
     return result.rows;
   }
 
@@ -72,6 +80,9 @@ export class InventoryService {
         [body.itemId]);
       if (!itemResult.rowCount) throw new NotFoundException('الصنف غير موجود أو غير نشط.');
       const item = itemResult.rows[0];
+      const precision=await client.query(`SELECT $1::numeric=ROUND($1::numeric,u.precision_digits) AS valid
+        FROM items i JOIN units_of_measure u ON u.id=i.base_unit_id WHERE i.id=$2`,[String(body.quantity),body.itemId]);
+      if(!precision.rows[0]?.valid)throw new BadRequestException('كمية الاستلام لا تطابق دقة وحدة قياس الصنف.');
       if (!item.stock_tracked || item.classification !== 'materials' || item.item_type === 'finished_good') {
         throw new BadRequestException('هذا الصنف غير مؤهل لاستلام خامات بالمخزن.');
       }

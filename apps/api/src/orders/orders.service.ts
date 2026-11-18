@@ -9,6 +9,7 @@ import { mkdir, stat, unlink, writeFile } from 'node:fs/promises';
 import { extname, basename, resolve } from 'node:path';
 import { Pool, PoolClient, QueryResultRow } from 'pg';
 import { ConfirmOrderDto } from './confirm-order.dto';
+import { OrderAvailabilityService } from '../inventory/order-availability.service';
 
 export interface CreateCustomerOrderInput {
   orderNo: string;
@@ -103,6 +104,7 @@ export interface UploadedEngineeringFile {
 
 @Injectable()
 export class OrdersService {
+  constructor(private readonly availability:OrderAvailabilityService=new OrderAvailabilityService()){}
   private readonly pool = new Pool({
     connectionString: process.env.DATABASE_URL ?? 'postgresql://erp_app:change-me-for-local-development@localhost:5432/wood_factory_erp',
   });
@@ -156,6 +158,10 @@ export class OrdersService {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
+      // Serialize confirmations before inserting demand. The following READ
+      // COMMITTED statements then see the preceding confirmation's committed
+      // requirements, including when two users confirm at the same time.
+      await client.query('SELECT pg_advisory_xact_lock(78231, 1)');
       const customer = await client.query(`SELECT id FROM parties WHERE id = $1 AND active = true AND party_type IN ('customer', 'both') FOR SHARE`, [body.customerId]);
       if (!customer.rowCount) throw new BadRequestException('Select an active customer.');
       for (const line of body.accessories) {
@@ -190,8 +196,9 @@ export class OrdersService {
             basename(file.originalname.replace(/\\/g, '/')).replace(/[\r\n\0]/g, '').slice(0,255),
             file.mimetype || 'application/octet-stream', file.buffer]);
       }
+      const availability=await this.availability.forOrder(client,id);
       await client.query('COMMIT');
-      return order.rows[0];
+      return {...order.rows[0],availability};
     } catch (error) {
       await safeRollback(client);
       this.translateDatabaseError(error);

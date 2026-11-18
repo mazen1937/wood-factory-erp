@@ -3,7 +3,9 @@ using System.Reflection;
 using System.Text.Json;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Interactivity;
 using Avalonia.LogicalTree;
+using Avalonia.Threading;
 using WoodFactoryErp.Desktop;
 
 // No real session, server connection, file viewer or visible window.
@@ -44,4 +46,34 @@ Check(((IList)Field("pendingOrderMaterials")).Count==1,"A selected material is s
 ((TextBox)Field("orderMaterialQuantity")).Text="6";Call("AddWorkspaceItem",false);Check(((IList)Field("pendingOrderMaterials")).Count==1,"Updating a material does not create duplicate rows");
 ((TextBox)Field("orderMaterialQuantity")).Text="0.5";Call("AddWorkspaceItem",false);Check(((TextBlock)Field("OrdersMessageTextBlock")).Text!.Contains("دقة وحدة"),"Fractional quantities are checked against the unit");
 ((TextBox)Field("orderMaterialQuantity")).Text="1,5";Call("AddWorkspaceItem",false);Check(((TextBlock)Field("OrdersMessageTextBlock")).Text!.Contains("فواصل آلاف"),"A decimal comma cannot silently become a larger whole quantity");
+var ordersTab=(StackPanel)items[0].Content!;
+Check(ordersTab.GetLogicalDescendants().OfType<Button>().Any(b=>Equals(b.Content,"إضافة صنف خامة غير موجود")),"Order material form has an add-item shortcut");
+var draftCount=((IList)Field("pendingOrderMaterials")).Count;
+var dialog=(Window)Call("BuildOrderItemDialog",false)!;var dialogRoot=(ScrollViewer)dialog.Content!;var controls=dialogRoot.GetLogicalDescendants().OfType<Control>().ToList();
+Check(controls.OfType<TextBox>().Any(t=>t.PlaceholderText=="كود الصنف")&&controls.OfType<ComboBox>().Count()==2&&controls.OfType<AutoCompleteBox>().Any(),"Quick item popup includes identity, type, classification and searchable unit");
+var save=controls.OfType<Button>().Single(b=>Equals(b.Content,"حفظ الصنف"));save.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));Dispatcher.UIThread.RunJobs();
+Check(controls.OfType<TextBlock>().Any(t=>t.Text?.Contains("اكتب كود الصنف") == true),"Popup validates before requesting a master-data write");Check(((IList)Field("pendingOrderMaterials")).Count==draftCount,"Popup leaves the order draft intact");
+var confirmationType=typeof(MainWindow).GetNestedType("ConfirmedOrderResult",BindingFlags.NonPublic)!;
+var stockItem=new{orderId=id,orderNo="SO-NEW",orderName="غرفة المعيشة",orderDate="2026-11-18",customerName="عميل",itemId="raw",itemCode="PHS",itemName="خشب PHS",itemType="raw_material",unitCode="PCS",checkable=true,requiredQuantity="8",usableIssuedQuantity="0",remainingQuantity="8",onHandQuantity="3",availableQuantity="3",shortageQuantity="5",insufficient=true};
+var confirmed=JsonSerializer.Deserialize(JsonSerializer.Serialize(new{id,orderNo="SO-NEW",availability=new{items=new[]{stockItem},hasShortages=true,uncheckedItems=0}}),confirmationType,opts)!;
+Call("ShowOrderAvailability",confirmed);var stockPanel=(StackPanel)Field("orderAvailabilityPanel");Check(stockPanel.IsVisible&&stockPanel.GetLogicalDescendants().OfType<TextBlock>().Any(t=>t.Text?.Contains("غير كافٍ") == true),"Order confirmation displays an insufficient-stock warning");
+var reportType=typeof(MainWindow).GetNestedType("OrderShortageReport",BindingFlags.NonPublic)!;
+var report=JsonSerializer.Deserialize(JsonSerializer.Serialize(new{items=new[]{stockItem},legacyOrders=Array.Empty<object>()}),reportType,opts)!;Call("RenderInventoryShortages",report);
+var stockText=((StackPanel)Field("inventoryShortagesPanel")).GetLogicalDescendants().OfType<TextBlock>().Select(t=>t.Text??"").ToList();Check(stockText.Any(t=>t.Contains("SO-NEW"))&&stockText.Any(t=>t.Contains(id))&&stockText.Contains("PHS")&&stockText.Contains("5"),"Warehouse report identifies order code/ID, missing item and exact shortage");
 Console.WriteLine("PASS: Two card-based tabs, searchable parent identity, hidden details, inherited schedule, independent job editor and item-based material quantities.");
+Console.WriteLine("PASS: Quick master-item popup, preserved draft, confirmation shortage warning and order-linked warehouse shortage tables.");
+
+var shortagePanel=(StackPanel)Field("inventoryShortagesPanel");
+Button Toggle()=>shortagePanel.GetLogicalDescendants().OfType<Button>().Single(b=>Equals(b.Content,"عرض التفاصيل")||Equals(b.Content,"إخفاء التفاصيل"));
+StackPanel Detail()=>((StackPanel)Toggle().Parent!).Children.OfType<StackPanel>().Last();
+Check(!Detail().IsVisible,"Per-order shortage details are hidden by default");
+Toggle().RaiseEvent(new RoutedEventArgs(Button.ClickEvent));Check(Detail().IsVisible&&Equals(Toggle().Content,"إخفاء التفاصيل"),"Order details can be opened");
+Call("RenderInventoryShortages",report);Check(Detail().IsVisible,"Automatic refresh preserves an expanded order");
+Toggle().RaiseEvent(new RoutedEventArgs(Button.ClickEvent));Check(!Detail().IsVisible,"Order details can be hidden again");
+var search=(TextBox)Field("inventorySearch");Check(search.MaxLength==200&&search.Parent is Grid,"Inventory search uses one compact row");
+search.Text="SO-NEW PHS";Dispatcher.UIThread.RunJobs();Check(shortagePanel.GetLogicalDescendants().OfType<Button>().Any(),"Multi-word search matches across order and item fields");
+search.Text="no-such-item";Dispatcher.UIThread.RunJobs();Check(!shortagePanel.GetLogicalDescendants().OfType<Button>().Any(),"Unmatched search hides unrelated shortages");
+search.Text="MDF-X";Dispatcher.UIThread.RunJobs();Check(((StackPanel)Field("inventorySearchCatalog")).GetLogicalDescendants().OfType<TextBlock>().Any(t=>t.Text=="MDF-X"),"Search includes master items without balances");
+search.Text="اكسسوار";Dispatcher.UIThread.RunJobs();Check(((StackPanel)Field("inventorySearchCatalog")).GetLogicalDescendants().OfType<TextBlock>().Any(t=>t.Text=="ACC-X"),"Arabic item-type searches find accessories");
+search.Text="";Dispatcher.UIThread.RunJobs();Check(!Detail().IsVisible&&!((StackPanel)Field("inventorySearchCatalog")).IsVisible,"Clearing search restores the summary with details collapsed");
+Console.WriteLine("PASS: Collapsed order details, refresh-stable show/hide, compact multi-field inventory search and zero-balance item discovery.");

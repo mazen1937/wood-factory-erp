@@ -1,8 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
- <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net8.0</TargetFramework><Nullable>enable</Nullable><ImplicitUsings>enable</ImplicitUsings></PropertyGroup>
+ <PropertyGroup><DesktopVerificationOutput Condition="'$(DesktopVerificationOutput)' == ''">FinanceVerification</DesktopVerificationOutput><OutputType>Exe</OutputType><TargetFramework>net8.0</TargetFramework><Nullable>enable</Nullable><ImplicitUsings>enable</ImplicitUsings></PropertyGroup>
  <ItemGroup>
   <PackageReference Include="Avalonia.Desktop" Version="12.1.4" />
-  <Reference Include="WoodFactoryErp.Desktop"><HintPath>../../apps/desktop/WoodFactoryErp.Desktop/bin/FinanceVerification/WoodFactoryErp.Desktop.dll</HintPath></Reference>
+  <Reference Include="WoodFactoryErp.Desktop"><HintPath>../../apps/desktop/WoodFactoryErp.Desktop/bin/$(DesktopVerificationOutput)/WoodFactoryErp.Desktop.dll</HintPath></Reference>
   <PackageReference Include="QuestPDF" Version="2026.9.1" />
  </ItemGroup>
 </Project>

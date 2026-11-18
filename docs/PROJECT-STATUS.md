@@ -1,6 +1,26 @@
-# Project status — 2026-11-17
+# Project status — 2026-11-18
 
 ## Current handoff
+
+Pricing/selling/delivery update: **البيع والحسابات** now defaults to three tabs: guided sale/delivery, monthly book and expenses/payments. Dated saved selling prices are separate from revenue; sale/delivery deducts stock once and creates the receivable; cash collection settles it separately. A manager-approved, fully accepted whole-batch production receipt moves reconciled direct actual cost from WIP to finished stock. Shared pool, partial-batch allocation and formal close remain gated, and the monthly result stays provisional. Apply migration **017** once after 016, rebuild/restart both apps; see `SELLING-PRICING-WORKFLOW.md`. Live PostgreSQL verification is pending.
+
+Current verification: API and isolated desktop builds pass; 160 Node regressions pass and five PostgreSQL suites skip without disposable URLs. Finance/monthly/drafts/PDF and production runtime UI checks pass.
+
+Monthly finance workspace: **دفتر الشهر** is the default finance tab with source-driven monthly totals, a full-month searchable/paged activity table, order/job/source trees, CSV export and stock-to-job/cost-source exceptions. Entry forms use compact expand/collapse sections. Backend corrections enforce raw stock unit precision and original-order inheritance for source-based finance documents. That earlier monthly-only patch added no migration beyond 016; the pricing update above adds 017. Rebuild/restart both apps; see `FINANCE-MONTHLY-WORKSPACE.md`. Approved manufacturing/FG/WIP closing remains gated; real PostgreSQL month-end acceptance is pending.
+
+Monthly-view verification: both builds, 144 Node regressions, the built API's authenticated monthly routes and actual finance/monthly UI/draft/PDF checks pass. Four disposable PostgreSQL suites are skipped without test connection URLs. The actual user's database was not inspected or reconciled by this run.
+
+Wage-entry restoration: wages/workers now contains an independent registered-worker wage form for other described work, while assembly retains its wage form. Both use the same manufacturing source/costing/finance path and reference deduplication. Migration **016_general_worker_wages.sql** extends the work-cost category checks; apply once after 015 and rebuild/restart both apps. Previously posted wages are preserved.
+
+Worker endpoint/job-picker correction: the screenshot's missing POST route requires restarting the API from its updated build. Fixed a desktop dependency bug where a failed worker read prevented binding successfully fetched job choices. Job selection now loads independently, worker/API errors remain visible, and unsupported manufacturing actions are gated. Desktop build and built-API worker-route HTTP regression pass; no database migration is added by this correction.
+
+Production cost-workspace follow-up: migration **015_job_manufacturing_costs.sql** and cost-focused cutting/banding/assembly/packaging sections are prepared. Includes unique worker identities, exact source-linked machine/worker charges, per-section/job totals, phase-free quality acceptance and finance manufacturing reports/wage sources without duplicate expense posting. Existing historical wage commitments are preserved and can block conversion pending reconciliation. Owner must apply 015 after 014 and restart the updated apps. See `MANUFACTURING-COST-WORKSPACE.md`; real PostgreSQL acceptance remains pending.
+
+Local verification for this follow-up: both builds pass (desktop 23 existing warnings, zero errors), 132 Node regressions pass, and production plus finance runtime/draft/PDF checks pass. Three opt-in PostgreSQL suites are skipped without disposable test database URLs; no live migration or production costing/financial posting was performed here.
+
+Inventory usability follow-up: shortage totals stay visible with per-order details collapsed by default and persistent show/hide choices during refresh. A compact search covers stock items, balances, shortage orders and full-history movement matches (latest 250 matching movements displayed). No migration added; rebuild/restart API and desktop. See `ORDER-STOCK-SHORTAGES.md`.
+
+18 November: implemented order-confirmation stock checks, order-linked inventory replenishment tables and inline master-item creation. No new migration; this uses the order tables from 014. API/desktop builds, 30 focused regression tests and the Avalonia runtime checks pass. Real PostgreSQL integration is explicitly skipped without a disposable database connection; connected calculation/concurrency acceptance remains pending. See `ORDER-STOCK-SHORTAGES.md` for calculation rules, activation and checks.
 
 The owner reports that finance migration **013 is already applied**. Do not ask them to rerun it. Finance workflow/concurrency acceptance remains pending. The latest order patch requires **014** unless the owner subsequently confirms applying it. Latest focused order verification: both builds, 24 order/job regression tests and the actual Avalonia workspace smoke check pass. Preserve local database backups; they are intentionally excluded from Git.
 

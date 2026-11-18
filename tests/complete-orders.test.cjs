@@ -23,6 +23,10 @@ function harness(failAt) {
   const client = {
     async query(sql, values) {
       calls.push({ sql, values });
+      if(sql.includes('/* order-stock-availability */')){
+        if(failAt==='stock-report')throw new Error('Stock calculation failed');
+        const result=failAt==='stock-shortage'?[{orderId:'order-id',itemId,shortageQuantity:'3.0000',checkable:true,insufficient:true}]:[];return {rowCount:result.length,rows:result};
+      }
       if (failAt === 'customer' && sql.includes('FROM parties')) return { rowCount: 0, rows: [] };
       if (failAt === 'accessory' && sql.includes('FROM items')) return { rowCount: 0, rows: [] };
       if(sql.includes('FROM items i JOIN units_of_measure'))return {rowCount:failAt==='material'?0:1,rows:failAt==='material'?[]:[{id:itemId,precision_digits:0}]};
@@ -42,6 +46,7 @@ test('confirmation binds order totals once, all attachment metadata and accessor
   const h = harness();
   assert.equal((await h.service.confirmOrder(payload(), files(), customerId)).id, 'order-id');
   assert.equal(h.calls[0].sql, 'BEGIN');
+  assert.match(h.calls[1].sql, /pg_advisory_xact_lock/);
   assert.equal(h.calls.at(-1).sql, 'COMMIT');
   assert.ok(h.released());
   const order = h.calls.find(x => x.sql.includes('INSERT INTO customer_orders'));
@@ -126,4 +131,11 @@ for(const fail of ['material','material-precision','material-write'])test(`${fai
 test('new material payload validates without a legacy board total',async()=>{
   const good={...payload(),totalBoards:undefined,materials:[{itemId,quantity:4}]};assert.equal((await validate(plainToInstance(ConfirmOrderDto,good))).length,0);
   assert.ok((await validate(plainToInstance(ConfirmOrderDto,{...good,materials:[{itemId,quantity:0}]}))).length>0);
+});
+
+test('confirmation returns shortage quantities without rejecting or issuing stock',async()=>{
+ const h=harness('stock-shortage');const result=await h.service.confirmOrder(payload(),files());assert.equal(result.availability.hasShortages,true);assert.equal(result.availability.items[0].shortageQuantity,'3.0000');assert.equal(h.calls.at(-1).sql,'COMMIT');assert.ok(!h.calls.some(q=>/INSERT INTO inventory_|UPDATE inventory_/.test(q.sql)));
+});
+test('stock report failure rolls back the whole confirmation rather than reporting unchecked success',async()=>{
+ const h=harness('stock-report');await assert.rejects(h.service.confirmOrder(payload(),files()));assert.equal(h.calls.at(-1).sql,'ROLLBACK');assert.ok(!h.calls.some(c=>c.sql==='COMMIT'));
 });

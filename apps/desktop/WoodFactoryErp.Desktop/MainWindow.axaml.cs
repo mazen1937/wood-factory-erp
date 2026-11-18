@@ -566,21 +566,14 @@ public partial class MainWindow : Window
             balancesRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
             using var balancesResponse = await HttpClient.SendAsync(balancesRequest);
             await EnsureApiSuccessAsync(balancesResponse);
-            var balances = await balancesResponse.Content.ReadFromJsonAsync<List<InventoryBalance>>(JsonOptions) ?? [];
-            InventoryBalancesTextBlock.Text = balances.Count == 0 ? "لا توجد أرصدة مخزون بعد." : string.Join(Environment.NewLine, balances.Select(x =>
-                $"{x.ItemCode} — {x.ItemNameAr} | المخزن: {x.WarehouseCode} | الكمية بالمخزن: {x.QuantityOnHand:N4} | متوسط تكلفة الوحدة: {x.AverageUnitCost:N4} ج.م | القيمة الإجمالية للصنف: {x.InventoryValue:N4} ج.م"));
+            inventorySearchBalances = await balancesResponse.Content.ReadFromJsonAsync<List<InventoryBalance>>(JsonOptions) ?? [];
 
-            using var movementsRequest = new HttpRequestMessage(HttpMethod.Get, "inventory/movements");
-            movementsRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
-            using var movementsResponse = await HttpClient.SendAsync(movementsRequest);
-            await EnsureApiSuccessAsync(movementsResponse);
-            var movements = await movementsResponse.Content.ReadFromJsonAsync<List<InventoryMovement>>(JsonOptions) ?? [];
-            InventoryMovementsTextBlock.Text = movements.Count == 0 ? "لا توجد حركات بعد." : string.Join(Environment.NewLine, movements.Select(x =>
-                $"{x.MovementDate:yyyy-MM-dd} | {InventoryMovementLabel(x.MovementType)} | {x.DocumentReference} | {x.ItemCode} | كمية: {x.Quantity:N4} | تكلفة الوحدة: {x.UnitCost:N4} | الإجمالي: {x.TotalCost:N4} ج.م | متوسط بعد الحركة: {x.AverageCostAfter:N4}"));
+            RenderInventorySearch();
+            await SearchInventoryMovementsAsync();
             InventoryMessageTextBlock.Text = "تم تحميل الأرصدة والحركات.";
         }
         catch (Exception ex) { InventoryMessageTextBlock.Text = FriendlyError(ex); }
-        finally { RefreshInventoryButton.IsEnabled = true; }
+        finally { RefreshInventoryButton.IsEnabled = true; await LoadOrderShortagesAsync(); }
     }
 
     private async void PostReceiptAsync(object? sender, RoutedEventArgs e)

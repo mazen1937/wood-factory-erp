@@ -2,7 +2,12 @@ import { ArrayMaxSize, ArrayMinSize, ArrayUnique, IsArray, IsBoolean, IsDateStri
 
 export class ExecutionCommandDto {
   @IsUUID() operationId!: string;
-  @IsIn(['start','progress','hold','resume','issue','return','waste','labor','consumable','accept','packaging_cost','wage_agreement','wage_due','quality_check']) action!: string;
+  @IsIn(['start','progress','hold','resume','issue','return','waste','labor','consumable','accept','packaging_cost','wage_agreement','wage_due','quality_check','work_cost','cost_mode']) action!: string;
+  @IsOptional() @IsBoolean() costFocused?: boolean;
+  @IsOptional() @IsIn(['cutting','ashareet','assembly','general_labor']) costStage?:string;
+  @IsOptional() @IsUUID() workerId?:string;
+  @IsOptional() @IsString() @MaxLength(160) machineName?:string;
+  @IsOptional() @IsIn(['unit','minute','hour','daily','weekly','monthly']) costBasis?:string;
   @Matches(/^\d{4}-\d{2}-\d{2}$/) @IsDateString({strict:true}) workDate!: string;
   @IsOptional() @IsString() @MaxLength(2000) notes?: string;
   @IsOptional() @IsArray() @ArrayMinSize(1) @ArrayMaxSize(30) @ArrayUnique() @IsString({each:true}) stages?: string[];
@@ -23,6 +28,13 @@ export class ExecutionCommandDto {
   @IsOptional() @IsString() @MaxLength(120) documentReference?: string;
   @IsOptional() @IsNumber({maxDecimalPlaces:4}) @Min(0.0001) @Max(999999999) quantity?: number;
   @IsOptional() @IsNumber({maxDecimalPlaces:4}) @Min(0.0001) @Max(999999999) amount?: number;
+}
+
+export class WorkerDto {
+ @IsUUID() id!:string;
+ @IsString() @MinLength(1) @MaxLength(60) code!:string;
+ @IsString() @MinLength(1) @MaxLength(160) nameAr!:string;
+ @IsOptional() @IsString() @MaxLength(160) nameEn?:string;
 }
 
 export class LaborRateDto {
